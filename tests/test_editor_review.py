@@ -97,7 +97,7 @@ def test_editorial_request_includes_word_timestamp_pauses(tmp_path, monkeypatch)
     assert "Inspect the entire timeline before answering" in system_prompt
     assert "Do not stop after finding the first edit" in system_prompt
     assert '"start_block":1' not in system_prompt
-    assert captured["body"]["max_tokens"] == 4096
+    assert captured["body"]["max_tokens"] == 8192
     assert "chat_template_kwargs" not in captured["body"]
     assert captured["body"]["reasoning_effort"] == "low"
     schema = captured["body"]["response_format"]

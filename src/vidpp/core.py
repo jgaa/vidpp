@@ -450,7 +450,7 @@ def _llm_timeout() -> float:
 
 
 def _llm_max_tokens() -> int:
-    value = os.environ.get("VIDPP_LLM_MAX_TOKENS", "4096")
+    value = os.environ.get("VIDPP_LLM_MAX_TOKENS", "8192")
     try:
         max_tokens = int(value)
     except ValueError as exc:

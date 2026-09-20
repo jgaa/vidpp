@@ -178,8 +178,8 @@ export VIDPP_LLM_BASE_URL=http://model-machine:8000/v1
 export VIDPP_LLM_MODEL=Qwen3-4B-Instruct
 # Optional; local thinking models may need several minutes. Default: 600 seconds.
 export VIDPP_LLM_TIMEOUT=600
-# Optional generation budget. Default: 4096; thinking-only models may need more.
-export VIDPP_LLM_MAX_TOKENS=4096
+# Optional generation budget. Default: 8192; thinking-only models may need more.
+export VIDPP_LLM_MAX_TOKENS=8192
 ```
 
 ### llama.cpp server on an AMD Vulkan system
@@ -207,7 +207,7 @@ This is a full Git history checkout and builds the complete project, including t
   --alias vidpp-editor \
   --host 127.0.0.1 --port 8080 \
   --n-gpu-layers all \
-  --ctx-size 16384 --n-predict 4096
+  --ctx-size 16384 --n-predict 8192
 ```
 
 `--n-gpu-layers all` asks llama.cpp to place all layers that fit in VRAM; reduce it to a number if the model does not fit. Confirm the startup log identifies `ggml_vulkan` and the AMD device. Point VidPP at the server alias:
