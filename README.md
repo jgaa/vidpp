@@ -25,6 +25,30 @@ All Python packages are installed in `.venv`; the machine's shared Python enviro
 
 `transcript.json` contains timestamped segments, for example `{"segments":[{"start":0.0,"end":2.2,"text":"A short spoken sentence."}]}`. VidPP creates `source.vidpp/` by default, references rather than copies the source, retains the transcript, analysis and semantic edit plan, and writes `output/final.mp4`. Individual stages are `import`, `transcribe`, `analyze`, `plan`, `preview`, and `render`.
 
+### Multiple source videos
+
+Pass source videos in the order they should appear:
+
+```bash
+vidpp process take-1.mp4 take-2.mp4 take-3.mp4 \
+  --project combined.vidpp \
+  --hook "One continuous video"
+```
+
+For staged processing:
+
+```bash
+vidpp import take-1.mp4 take-2.mp4 take-3.mp4 combined.vidpp
+vidpp transcribe combined.vidpp
+vidpp analyze combined.vidpp
+vidpp plan combined.vidpp
+vidpp render combined.vidpp
+```
+
+Multiple inputs are normalized and concatenated into `cache/master.mp4`. Transcription, analysis, semantic edits, captions, and rendering use that continuous master timeline. The original videos are only read. `project.json` retains every original absolute path, its inspected metadata, and its start/end on the master timeline. If the cached master is deleted, VidPP rebuilds it from the originals.
+
+For now, inputs must have matching displayed dimensions and frame rates and must contain audio. VidPP validates dimensions and frame rate before combining them; FFmpeg reports other incompatible stream details. A single source continues to be referenced directly without creating a master. Without `--project`, a multi-source project is named after the first input.
+
 ### Output size and orientation
 
 The default destination is `p720` with automatic orientation. A landscape source produces 1280×720; a portrait source produces 720×1280. Auto treats a square source as landscape. The `p` value is the short edge of a 16:9 output and may be overridden for the complete pipeline or an individual render:

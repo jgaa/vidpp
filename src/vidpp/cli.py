@@ -22,7 +22,7 @@ def parser() -> argparse.ArgumentParser:
     app.add_argument("-v", "--verbose", action="count", default=0)
     commands = app.add_subparsers(dest="command", required=True)
     import_cmd = commands.add_parser("import", help="create a project without copying source media")
-    import_cmd.add_argument("source", type=Path); import_cmd.add_argument("project", type=Path)
+    import_cmd.add_argument("sources", type=Path, nargs="+"); import_cmd.add_argument("project", type=Path)
     import_cmd.add_argument("--project-config", type=Path)
     for name in ("transcribe", "analyze", "plan", "render", "preview"):
         cmd = commands.add_parser(name); cmd.add_argument("project", type=_project); cmd.add_argument("--template", type=Path); cmd.add_argument("--hook")
@@ -31,7 +31,7 @@ def parser() -> argparse.ArgumentParser:
             cmd.add_argument("--format", dest="output_format", metavar="p720")
             cmd.add_argument("--orientation", choices=("auto", "portrait", "landscape"))
     process = commands.add_parser("process", help="run the complete pipeline")
-    process.add_argument("source", type=Path); process.add_argument("--project", type=Path); process.add_argument("--template", type=Path); process.add_argument("--hook"); process.add_argument("--transcript", type=Path)
+    process.add_argument("sources", type=Path, nargs="+"); process.add_argument("--project", type=Path); process.add_argument("--template", type=Path); process.add_argument("--hook"); process.add_argument("--transcript", type=Path)
     process.add_argument("--project-config", type=Path)
     process.add_argument("--format", dest="output_format", metavar="p720")
     process.add_argument("--orientation", choices=("auto", "portrait", "landscape"))
@@ -46,14 +46,14 @@ def main(argv: list[str] | None = None) -> int:
             raise VidPPError(f"project configuration does not exist: {args.project_config}")
         if args.command == "import":
             LOG.info("Inspecting source and creating project...")
-            create_project(args.source, args.project)
+            create_project(args.sources, args.project)
             if args.project_config: shutil.copyfile(args.project_config, args.project / "config.yaml")
             print(f"Created project: {args.project}")
             return 0
         if args.command == "process":
-            project = args.project or Path(args.source.stem + ".vidpp")
+            project = args.project or Path(args.sources[0].stem + ".vidpp")
             LOG.info("Inspecting source and creating project...")
-            metadata = create_project(args.source, project)
+            metadata = create_project(args.sources, project)
             source = metadata["source"]
             template = load_template(args.template, args.hook, source_width=source["width"], source_height=source["height"], output_format=args.output_format, orientation=args.orientation)
             LOG.info("Output format: %dx%d", template.width, template.height)

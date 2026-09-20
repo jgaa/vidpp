@@ -61,13 +61,65 @@ def inspect(source: Path) -> dict[str, Any]:
     return metadata
 
 
-def create_project(source: Path, project: Path) -> dict[str, Any]:
-    source = source.resolve()
+def _validate_matching_sources(sources: list[tuple[Path, dict[str, Any]]]) -> None:
+    first_path, first = sources[0]
+    for path, metadata in sources[1:]:
+        if (metadata["width"], metadata["height"], metadata["fps"]) != (first["width"], first["height"], first["fps"]):
+            raise VidPPError(
+                f"source format differs: {path} is {metadata['width']}x{metadata['height']} at {metadata['fps']}, "
+                f"expected {first['width']}x{first['height']} at {first['fps']} like {first_path}"
+            )
+
+
+def build_master(sources: list[Path], target: Path) -> None:
+    """Create one normalized timeline from ordered source videos."""
+    if len(sources) < 2:
+        raise VidPPError("a combined master requires at least two source videos")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    command = ["ffmpeg", "-y"]
+    for source in sources:
+        command.extend(["-i", str(source)])
+    parts, inputs = [], []
+    for index in range(len(sources)):
+        parts.extend([
+            f"[{index}:v:0]setpts=PTS-STARTPTS,setsar=1[v{index}]",
+            f"[{index}:a:0]aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[a{index}]",
+        ])
+        inputs.append(f"[v{index}][a{index}]")
+    parts.append("".join(inputs) + f"concat=n={len(sources)}:v=1:a=1[outv][outa]")
+    command.extend([
+        "-filter_complex", ";".join(parts), "-map", "[outv]", "-map", "[outa]",
+        "-map_metadata", "-1", "-c:v", "libx264", "-preset", "fast", "-crf", "16",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(target),
+    ])
+    LOG.info("Combining %d source videos into cache/master.mp4...", len(sources))
+    run(command)
+
+
+def create_project(source: Path | list[Path], project: Path) -> dict[str, Any]:
+    source_paths = [source] if isinstance(source, Path) else source
+    if not source_paths:
+        raise VidPPError("at least one source video is required")
+    source_paths = [path.resolve() for path in source_paths]
+    inspected = [(path, inspect(path)) for path in source_paths]
+    _validate_matching_sources(inspected)
     if project.exists() and any(project.iterdir()): raise VidPPError(f"project directory is not empty: {project}")
     project.mkdir(parents=True, exist_ok=True)
     for name in ("assets", "cache", "previews", "output"):
         (project / name).mkdir(exist_ok=True)
-    metadata = {"version": 1, "source_path": str(source), "source": inspect(source)}
+    active_source = source_paths[0]
+    if len(source_paths) > 1:
+        active_source = (project / "cache/master.mp4").resolve()
+        build_master(source_paths, active_source)
+        active_metadata = inspect(active_source)
+    else:
+        active_metadata = inspected[0][1]
+    offset = 0.0
+    source_records = []
+    for path, item in inspected:
+        source_records.append({"path": str(path), "timeline_start": offset, "timeline_end": offset + item["duration"], "source": item})
+        offset += item["duration"]
+    metadata = {"version": 1, "source_path": str(active_source), "source": active_metadata, "sources": source_records}
     write_json(project / "project.json", metadata)
     return metadata
 
@@ -76,7 +128,17 @@ def project_data(project: Path) -> dict[str, Any]:
     try: raw = json.loads((project / "project.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc: raise VidPPError(f"invalid project: {exc}") from exc
     if not isinstance(raw, dict) or raw.get("version") != 1 or not isinstance(raw.get("source_path"), str): raise VidPPError("invalid project.json")
-    if not Path(raw["source_path"]).is_file(): raise VidPPError("project source video no longer exists")
+    active_source = Path(raw["source_path"])
+    if not active_source.is_file():
+        sources = raw.get("sources")
+        expected_master = (project / "cache/master.mp4").resolve()
+        if active_source.resolve() == expected_master and isinstance(sources, list) and len(sources) > 1:
+            paths = [Path(item["path"]) for item in sources if isinstance(item, dict) and isinstance(item.get("path"), str)]
+            if len(paths) != len(sources) or not all(path.is_file() for path in paths):
+                raise VidPPError("combined master is missing and one or more original source videos are unavailable")
+            build_master(paths, expected_master)
+        else:
+            raise VidPPError("project source video no longer exists")
     return raw
 
 
