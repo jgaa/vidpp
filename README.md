@@ -32,6 +32,17 @@ An explicit `--hook` updates the saved project value. Use `--hook ""` to clear
 it. Hook precedence is an explicit CLI value, then the saved project hook, then
 the template's `hook.text`.
 
+Pass `--open` to `process` or `render` to launch the completed video in the
+operating system's default viewer without waiting for the viewer to close:
+
+```bash
+vidpp process source.mp4 --open
+vidpp render source.vidpp --open
+```
+
+On Linux this uses `xdg-open`; on macOS it uses `open`; on Windows it uses the
+registered file association.
+
 For a source that is already edited, keep the full timeline and run only transcription, subtitles, template processing, audio processing, and rendering:
 
 ```bash

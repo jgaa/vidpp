@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from pathlib import Path
+import shlex
+import subprocess
 import sys
 import shutil
 import tempfile
@@ -77,6 +80,33 @@ def _save_effective_hook(project: Path, hook: str, override: str | None) -> None
         save_project_hook(project, hook)
 
 
+def open_video(path: Path) -> None:
+    """Open a completed video with the platform's default viewer without waiting."""
+    target = path.resolve()
+    if not target.is_file():
+        raise VidPPError(f"rendered video does not exist: {target}")
+    LOG.info("Opening rendered video in the default viewer: %s", target)
+    try:
+        if sys.platform == "win32":
+            startfile = getattr(os, "startfile", None)
+            if startfile is None:
+                raise OSError("os.startfile is unavailable")
+            LOG.debug("Opening video with os.startfile: %s", target)
+            startfile(str(target))
+            return
+        command = ["open" if sys.platform == "darwin" else "xdg-open", str(target)]
+        LOG.debug("Executing desktop opener: %s", shlex.join(command))
+        subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise VidPPError(f"could not open rendered video with the default viewer: {exc}") from exc
+
+
 def parser() -> argparse.ArgumentParser:
     app = VidPPArgumentParser(prog="vidpp", description="Local, deterministic social-video post-processing")
     app.add_argument("-v", "--verbose", action="count", default=0)
@@ -92,6 +122,8 @@ def parser() -> argparse.ArgumentParser:
             cmd.add_argument("--format", dest="output_format", metavar="p720")
             cmd.add_argument("--orientation", choices=("auto", "portrait", "landscape"))
             cmd.add_argument("--no-edit", action="store_true", help="ignore edit.json and keep the complete timeline")
+        if name == "render":
+            cmd.add_argument("--open", action="store_true", help="open the completed video in the default viewer")
     process = commands.add_parser("process", help="run the complete pipeline")
     process.add_argument("sources", type=Path, nargs="+")
     destination = process.add_mutually_exclusive_group()
@@ -99,6 +131,7 @@ def parser() -> argparse.ArgumentParser:
     destination.add_argument("--project-name", type=_project_name, help="project directory name; .vidpp is appended")
     process.add_argument("--replace-project", action="store_true", help="remove and recreate the destination project")
     process.add_argument("--no-edit", action="store_true", help="skip edit analysis/planning and keep the complete timeline")
+    process.add_argument("--open", action="store_true", help="open the completed video in the default viewer")
     process.add_argument("--template", type=Path); process.add_argument("--hook"); process.add_argument("--transcript", type=Path)
     process.add_argument("--project-config", type=Path)
     process.add_argument("--format", dest="output_format", metavar="p720")
@@ -144,6 +177,8 @@ def main(argv: list[str] | None = None) -> int:
                 operations = plan(project, template)
             LOG.info("Rendering final video...")
             target = render(project, template, apply_edits=not args.no_edit)
+            if args.open:
+                open_video(target)
             if args.no_edit:
                 print(f"Editing disabled. Done: {target}")
                 return 0
@@ -180,7 +215,10 @@ def main(argv: list[str] | None = None) -> int:
             template = load_template(args.template, hook, source_width=metadata["width"], source_height=metadata["height"], output_format=args.output_format, orientation=args.orientation)
             _save_effective_hook(args.project, template.hook_text, hook)
             LOG.info("Output format: %dx%d", template.width, template.height)
-            print(f"Done: {render(args.project, template, preview=args.command == 'preview', apply_edits=not args.no_edit)}")
+            target = render(args.project, template, preview=args.command == "preview", apply_edits=not args.no_edit)
+            if args.command == "render" and args.open:
+                open_video(target)
+            print(f"Done: {target}")
         return 0
     except VidPPError as exc:
         logging.error("%s", exc); return 2

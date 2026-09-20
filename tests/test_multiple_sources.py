@@ -41,8 +41,26 @@ def test_cli_rejects_project_name_paths():
 
 
 def test_render_cli_accepts_no_edit():
-    args = parser().parse_args(["render", "demo.vidpp", "--no-edit"])
+    args = parser().parse_args(["render", "demo.vidpp", "--no-edit", "--open"])
     assert args.no_edit is True
+    assert args.open is True
+    process = parser().parse_args(["process", "source.mp4", "--open"])
+    assert process.open is True
+
+
+def test_open_video_uses_default_desktop_launcher(tmp_path, monkeypatch):
+    video = tmp_path / "final.mp4"
+    video.touch()
+    launched = []
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda command, **options: launched.append((command, options)))
+
+    cli.open_video(video)
+
+    command, options = launched[0]
+    assert command == ["xdg-open", str(video.resolve())]
+    assert options["start_new_session"] is True
+    assert options["stdin"] is cli.subprocess.DEVNULL
 
 
 def test_project_hook_roundtrip(tmp_path):
@@ -85,11 +103,14 @@ def test_render_uses_and_updates_saved_project_hook(tmp_path, monkeypatch):
         "hook": "Saved hook",
     }))
     rendered = []
+    opened = []
     monkeypatch.setattr(cli, "refresh_source_metadata", lambda unused: {"width": 1080, "height": 1920})
     monkeypatch.setattr(cli, "render", lambda unused_project, template, **unused: rendered.append(template) or project / "output/final.mp4")
+    monkeypatch.setattr(cli, "open_video", opened.append)
 
-    assert cli.main(["render", str(project)]) == 0
+    assert cli.main(["render", str(project), "--open"]) == 0
     assert rendered[-1].hook_text == "Saved hook"
+    assert opened == [project / "output/final.mp4"]
 
     assert cli.main(["render", str(project), "--hook", "Replacement hook"]) == 0
     assert rendered[-1].hook_text == "Replacement hook"
@@ -105,6 +126,7 @@ def test_process_saves_hook_in_new_project(tmp_path, monkeypatch):
     source.touch()
     project = tmp_path / "demo.vidpp"
     rendered = []
+    opened = []
 
     def fake_create(unused_sources, destination):
         destination.mkdir()
@@ -123,15 +145,24 @@ def test_process_saves_hook_in_new_project(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "analyze", lambda unused_project, unused_template: None)
     monkeypatch.setattr(cli, "plan", lambda unused_project, unused_template: [])
     monkeypatch.setattr(cli, "render", lambda unused_project, template, **unused: rendered.append(template) or project / "output/final.mp4")
+    monkeypatch.setattr(cli, "open_video", opened.append)
 
-    assert cli.main(["process", str(source), "--project", str(project), "--hook", "Persistent hook"]) == 0
+    assert cli.main(["process", str(source), "--project", str(project), "--hook", "Persistent hook", "--open"]) == 0
     assert rendered[-1].hook_text == "Persistent hook"
     assert project_hook(project) == "Persistent hook"
+    assert opened == [project / "output/final.mp4"]
+
+    template = tmp_path / "template.yaml"
+    template.write_text("version: 1\nhook: {text: Template hook}\n")
+    template_project = tmp_path / "from-template.vidpp"
+    assert cli.main(["process", str(source), "--project", str(template_project), "--template", str(template)]) == 0
+    assert rendered[-1].hook_text == "Template hook"
+    assert project_hook(template_project) == "Template hook"
 
 
 def test_root_help_lists_command_options():
     help_text = parser().format_help()
-    for option in ("--no-edit", "--project-name", "--replace-project", "--transcript", "--template", "--format"):
+    for option in ("--no-edit", "--open", "--project-name", "--replace-project", "--transcript", "--template", "--format"):
         assert option in help_text
     assert "command options:" in help_text
 

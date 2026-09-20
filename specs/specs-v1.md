@@ -532,6 +532,13 @@ into the final video.
 
 Rendering must be deterministic.
 
+The `process` and `render` commands accept `--open`. After a successful render,
+the CLI launches the completed video asynchronously through the operating
+system's default file association. Viewer launching is a CLI convenience and
+must remain outside the deterministic renderer core. Failure to start the
+platform opener produces an actionable CLI error and does not delete or modify
+the completed output.
+
 The renderer is responsible for converting semantic operations into FFmpeg operations.
 
 It should handle:
