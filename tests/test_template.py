@@ -28,6 +28,59 @@ def test_template_reads_caption_flow_controls(tmp_path):
 def test_default_captions_are_short_and_large():
     value = load_template(None)
     assert (value.subtitle_font_size, value.subtitle_max_words, value.subtitle_max_characters) == (54, 8, 48)
+    assert (value.subtitle_font, value.subtitle_weight, value.subtitle_color) == ("Noto Sans", 600, "#F8F8F8")
+    assert (value.subtitle_outline_color, value.subtitle_outline_width, value.subtitle_background) == ("#101010", 3, None)
+    assert (value.hook_font, value.hook_weight, value.hook_color, value.hook_background_color) == (
+        "Noto Sans", 700, "#FFFFFF", "#D90F0F0F"
+    )
+
+
+def test_visual_defaults_scale_from_1080x1920_reference():
+    value = load_template(None, source_width=1080, source_height=1920, output_format="p1080")
+    assert (value.width, value.height) == (1080, 1920)
+    assert (value.subtitle_font_size, value.subtitle_outline_width, value.subtitle_bottom_margin) == (81, 3, 180)
+    assert (value.hook_font_size, value.hook_corner_radius, value.hook_padding_x, value.hook_padding_y) == (108, 24, 32, 18)
+
+
+def test_template_can_override_text_styles(tmp_path):
+    path = tmp_path / "template.yaml"
+    path.write_text(
+        """version: 1
+subtitles:
+  font: DejaVu Sans
+  font_size: 50
+  weight: 500
+  color: '#EEEEEE'
+  outline_color: '#111111'
+  outline_width: 4
+  background: '#CC202020'
+hook:
+  text: Styled hook
+  font: DejaVu Sans
+  font_size: 90
+  weight: 800
+  color: '#FAFAFA'
+  background_color: '#C0000000'
+  corner_radius: 30
+  padding_x: 40
+  padding_y: 20
+"""
+    )
+    value = load_template(path)
+    assert (value.subtitle_font, value.subtitle_font_size, value.subtitle_weight) == ("DejaVu Sans", 50, 500)
+    assert (value.subtitle_color, value.subtitle_outline_color, value.subtitle_outline_width) == ("#EEEEEE", "#111111", 4)
+    assert value.subtitle_background == "#CC202020"
+    assert (value.hook_font, value.hook_font_size, value.hook_weight) == ("DejaVu Sans", 90, 800)
+    assert (value.hook_color, value.hook_background_color) == ("#FAFAFA", "#C0000000")
+    assert (value.hook_corner_radius, value.hook_padding_x, value.hook_padding_y) == (30, 40, 20)
+
+
+@pytest.mark.parametrize("weight", [0, 550, 1000, True])
+def test_template_rejects_invalid_font_weight(tmp_path, weight):
+    path = tmp_path / "template.yaml"
+    path.write_text(f"version: 1\nsubtitles: {{weight: {str(weight).lower()}}}\n")
+    with pytest.raises(VidPPError, match="subtitles.weight"):
+        load_template(path)
 
 
 @pytest.mark.parametrize(

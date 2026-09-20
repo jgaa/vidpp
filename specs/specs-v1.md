@@ -181,10 +181,11 @@ video:
 subtitles:
   enabled: true
   font: "Noto Sans"
-  font_size: 54
-  color: "#FFFFFF"
-  outline_color: "#000000"
+  weight: 600
+  color: "#F8F8F8"
+  outline_color: "#101010"
   outline_width: 3
+  background: none
   position: bottom
   bottom_margin: 180
   max_lines: 2
@@ -192,10 +193,13 @@ subtitles:
 hook:
   enabled: true
   text: "Why your private messages may not be private"
-  image: assets/hook-bubble.svg
   font: "Noto Sans"
-  font_size: 56
-  color: "#000000"
+  weight: 700
+  color: "#FFFFFF"
+  background_color: "#D90F0F0F"
+  corner_radius: 24
+  padding_x: 32
+  padding_y: 18
   duration: 4.0
   position: top
 
@@ -259,7 +263,11 @@ The renderer should perform the required scale/crop/pad operations.
 
 Support an optional introductory hook.
 
-The user supplies:
+The user supplies hook text and may optionally supply an SVG/PNG bubble or
+background. Without an image, the renderer must measure the text and generate a
+tightly sized rounded bubble. The default hook uses Noto Sans Bold, near-white
+text, and an approximately 85% opaque dark background. It must be visually
+larger and distinct from transcript subtitles.
 
 ```text
 hook text
@@ -276,6 +284,9 @@ vidpp process source.mp4 \
 ```
 
 The hook should appear for a configurable duration near the beginning of the video.
+Its font, weight, font size, text color, background color, corner radius, and
+horizontal/vertical padding must be independently configurable. Eight-digit
+template colors use opacity-first `#AARRGGBB` notation.
 
 The bubble/background image should be independently configurable from the text so the same asset can be reused for many videos.
 
@@ -316,12 +327,20 @@ Generate burned-in subtitles.
 The subtitle renderer must support at least:
 
 * font;
+* font weight;
 * font size;
 * text color;
 * outline/shadow;
+* optional background color, disabled by default;
 * position;
 * margins;
 * maximum lines.
+
+The default vertical-video style uses centered Noto Sans SemiBold, near-white
+text, a strong near-black outline, no subtitle box, no more than two lines, and
+a generous bottom safe margin. Visual defaults are specified against a
+1080×1920 reference frame and scale proportionally with output dimensions;
+explicit template dimensions remain output pixels.
 
 Subtitle text should be broken into readable chunks rather than displaying entire transcript segments.
 

@@ -31,17 +31,20 @@ def timed_words(segment: TranscriptSegment) -> tuple[TranscriptWord, ...]:
     return tuple(result)
 
 
-def caption_font(name: str, size: int):
+def caption_font(name: str, size: int, weight: int = 400):
     if ImageFont is None:
         raise VidPPError(
             "Pillow is required for subtitle layout. Update the active virtual environment with "
             "'python -m pip install -e .', then retry."
-        )
+    )
     try:
-        LOG.debug("Resolving subtitle font: fc-match -f %%{file} %r", name)
-        result = subprocess.run(["fc-match", "-f", "%{file}", name], capture_output=True, text=True, check=True)
+        # Fontconfig's numeric scale is different from CSS/OpenType weights.
+        fontconfig_weight = 200 if weight >= 700 else 180 if weight >= 600 else 100 if weight >= 500 else 80
+        pattern = f"{name}:weight={fontconfig_weight}"
+        LOG.debug("Resolving font: fc-match -f %%{file} %r (weight %d)", pattern, weight)
+        result = subprocess.run(["fc-match", "-f", "%{file}", pattern], capture_output=True, text=True, check=True)
         font = ImageFont.truetype(result.stdout.strip(), size)
-        LOG.debug("Subtitle font resolved to %s at %d pixels", result.stdout.strip(), size)
+        LOG.debug("Font resolved to %s at %d pixels (weight %d)", result.stdout.strip(), size, weight)
         return font
     except (OSError, subprocess.CalledProcessError) as exc:
         raise VidPPError("Cannot resolve subtitle font; install fontconfig and the configured font") from exc

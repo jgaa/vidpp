@@ -90,7 +90,7 @@ output:
 
 Explicit template `output.width` and `output.height` remain supported and take precedence when there is no CLI format/orientation override. Specify both dimensions together and do not combine them with `output.format`.
 
-The renderer needs local `ffmpeg`/`ffprobe` with libass and an installed subtitle font. It renders H.264/AAC MP4, edits detected long silences conservatively, composes an optional background and hook image, burns captions, and normalizes audio.
+The renderer needs local `ffmpeg`/`ffprobe` with libass, `fontconfig`, and an installed subtitle font. The defaults use Noto Sans; on Debian/Ubuntu install it with `sudo apt-get install fonts-noto-core fontconfig`. It renders H.264/AAC MP4, edits detected long silences conservatively, composes an optional background and hook, burns captions, and normalizes audio.
 
 ### Local transcription and editorial model
 
@@ -166,16 +166,34 @@ Captions use actual word boundaries and font-measured line breaks. Sentence endi
 
 ```yaml
 subtitles:
+  font: "Noto Sans"
+  weight: 600
+  color: "#F8F8F8"
+  outline_color: "#101010"
+  outline_width: 3
+  background: none
   max_lines: 2
-  font_size: 54
   max_words: 8
   max_characters: 48
   max_duration: 3.5
   pause_threshold: 0.45
   linger: 1.0
+
+hook:
+  font: "Noto Sans"
+  weight: 700
+  color: "#FFFFFF"
+  background_color: "#D90F0F0F"
+  corner_radius: 24
+  padding_x: 32
+  padding_y: 18
 ```
 
-`max_characters` counts letters and punctuation but not spaces or inserted line breaks. A single word is never split merely to satisfy that limit. Durations are seconds. Font lookup requires `fontconfig` (`sudo apt-get install fontconfig` on Debian/Ubuntu). The default font size is 54 pixels at p720 and scales with the output's short edge; an explicit `subtitles.font_size` is always in output pixels. Sentence grouping and short caption grouping are separate operations. Install updated dependencies in your active venv with `python -m pip install -e .`.
+The default subtitle is centered near-white Noto Sans SemiBold with a strong dark outline, no box, at most two lines, and a generous bottom safe margin. A text hook uses a larger Noto Sans Bold face in a rounded, semi-opaque, text-sized dark bubble. VidPP writes that generated overlay to `cache/hook.png`; an explicit `hook.image` continues to replace the generated bubble.
+
+The eight-digit color form is opacity-first `#AARRGGBB`, so `#D90F0F0F` is approximately 85% opaque dark gray. `subtitles.background` accepts `none`, `#RRGGBB`, or `#AARRGGBB`. All listed style properties can be overridden in a template.
+
+`max_characters` counts letters and punctuation but not spaces or inserted line breaks. A single word is never split merely to satisfy that limit. Durations are seconds. Font lookup requires `fontconfig`. Visual defaults scale from a 1080×1920 reference frame: subtitle type is 81 px and hook type is 108 px at p1080 (54 px and 72 px at p720), with padding, corner radius, outline, and safe margin scaled appropriately. Explicit template dimensions such as `font_size`, `padding_x`, and `corner_radius` are output pixels and do not scale. Sentence grouping and short caption grouping are separate operations. Install updated dependencies in your active venv with `python -m pip install -e .`.
 
 Normal CLI output announces source inspection, model loading/transcription, audio analysis, edit planning, and rendering before each stage starts. Use `-v` for transcript decisions and executed commands.
 

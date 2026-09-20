@@ -97,10 +97,23 @@ def test_ffmpeg_word_cut_render(tmp_path):
     (project / "transcript.json").write_text(json.dumps({"segments": [{"start": 0, "end": 2, "text": "Keep remove kept", "words": [
         {"word": "Keep", "start": 0, "end": .5}, {"word": "remove", "start": .5, "end": 1}, {"word": "kept", "start": 1, "end": 2}]}]}))
     (project / "edit.json").write_text(json.dumps({"version": 1, "operations": [{"id": "test", "type": "remove", "source_start": .5, "source_end": 1, "enabled": True}]}))
-    target = render(project, Template(width=320, height=480, video_width=320, video_height=480, subtitle_font="DejaVu Sans", subtitle_font_size=22, subtitle_bottom_margin=30), preview=True)
+    target = render(project, Template(
+        width=320,
+        height=480,
+        video_width=320,
+        video_height=480,
+        subtitle_font="DejaVu Sans",
+        subtitle_font_size=22,
+        subtitle_bottom_margin=30,
+        hook_enabled=True,
+        hook_text="Test hook",
+        hook_font="DejaVu Sans",
+        hook_font_size=30,
+    ), preview=True)
     probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(target)], capture_output=True, text=True, check=True)
     assert float(json.loads(probe.stdout)["format"]["duration"]) == pytest.approx(1.5, abs=.15)
     assert "remove" not in (project / "cache/captions.ass").read_text()
+    assert (project / "cache/hook.png").is_file()
 
     unedited = render(project, Template(width=320, height=480, video_width=320, video_height=480, subtitle_font="DejaVu Sans", subtitle_font_size=22, subtitle_bottom_margin=30), preview=True, apply_edits=False)
     unedited_probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(unedited)], capture_output=True, text=True, check=True)
