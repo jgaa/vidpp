@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 from vidpp.cli import _prepare_project_destination, parser
-from vidpp.core import create_project, project_data
+from vidpp.core import _validate_matching_sources, create_project, project_data
 from vidpp.errors import VidPPError
 
 
@@ -91,3 +91,16 @@ def test_different_source_dimensions_are_rejected(tmp_path):
     _video(second, size="320x180")
     with pytest.raises(VidPPError, match="source format differs"):
         create_project([first, second], tmp_path / "project")
+
+
+def test_phone_variable_frame_rate_fractions_are_compatible():
+    first = (Path("first.mp4"), {"width": 1080, "height": 1920, "fps": "41970000/1401983"})
+    second = (Path("second.mp4"), {"width": 1080, "height": 1920, "fps": "815625/27137"})
+    _validate_matching_sources([first, second])
+
+
+def test_genuinely_different_frame_rates_are_rejected():
+    first = (Path("first.mp4"), {"width": 1080, "height": 1920, "fps": "30/1"})
+    second = (Path("second.mp4"), {"width": 1080, "height": 1920, "fps": "24/1"})
+    with pytest.raises(VidPPError, match="source format differs"):
+        _validate_matching_sources([first, second])

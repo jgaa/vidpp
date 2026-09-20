@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, replace
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 import json
@@ -65,12 +66,28 @@ def inspect(source: Path) -> dict[str, Any]:
 
 def _validate_matching_sources(sources: list[tuple[Path, dict[str, Any]]]) -> None:
     first_path, first = sources[0]
+    try:
+        first_fps = float(Fraction(str(first["fps"])))
+    except (KeyError, ValueError, ZeroDivisionError) as exc:
+        raise VidPPError(f"invalid average frame rate for {first_path}: {first.get('fps')!r}") from exc
+    if not 0 < first_fps <= 1000:
+        raise VidPPError(f"invalid average frame rate for {first_path}: {first.get('fps')!r}")
     for path, metadata in sources[1:]:
-        if (metadata["width"], metadata["height"], metadata["fps"]) != (first["width"], first["height"], first["fps"]):
+        try:
+            fps = float(Fraction(str(metadata["fps"])))
+        except (KeyError, ValueError, ZeroDivisionError) as exc:
+            raise VidPPError(f"invalid average frame rate for {path}: {metadata.get('fps')!r}") from exc
+        fps_tolerance = max(0.5, first_fps * 0.05)
+        if ((metadata["width"], metadata["height"]) != (first["width"], first["height"]) or
+                not 0 < fps <= 1000 or abs(fps - first_fps) > fps_tolerance):
             raise VidPPError(
-                f"source format differs: {path} is {metadata['width']}x{metadata['height']} at {metadata['fps']}, "
-                f"expected {first['width']}x{first['height']} at {first['fps']} like {first_path}"
+                f"source format differs: {path} is {metadata['width']}x{metadata['height']} at "
+                f"{metadata['fps']} ({fps:.3f} fps), expected {first['width']}x{first['height']} near "
+                f"{first['fps']} ({first_fps:.3f} fps) like {first_path}"
             )
+        if metadata["fps"] != first["fps"]:
+            LOG.debug("Accepting compatible variable frame rates: %s %.3f fps and %s %.3f fps",
+                      first_path, first_fps, path, fps)
 
 
 def build_master(sources: list[Path], target: Path) -> None:

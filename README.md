@@ -56,7 +56,7 @@ vidpp import first.mp4 second.mp4 combined.vidpp --replace-project
 
 Replacement is destructive for the destination project directory. VidPP refuses symlinks, protected or broad directories, unrecognized non-`.vidpp` directories, and any destination containing one of the source files. Source media is never removed.
 
-For now, inputs must have matching displayed dimensions and frame rates and must contain audio. VidPP validates dimensions and frame rate before combining them; FFmpeg reports other incompatible stream details. A single source continues to be referenced directly without creating a master. Without `--project`, a multi-source project is named after the first input.
+For now, inputs must have matching displayed dimensions, compatible nominal frame rates, and audio. VidPP compares frame rates numerically with a 5% tolerance because phone recordings commonly report slightly different average-rate fractions for the same nominal mode; genuinely different rates such as 24 fps and 30 fps remain incompatible. FFmpeg reports other incompatible stream details. A single source continues to be referenced directly without creating a master. Without `--project`, a multi-source project is named after the first input.
 
 ### Output size and orientation
 
