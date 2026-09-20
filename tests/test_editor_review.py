@@ -94,6 +94,9 @@ def test_editorial_request_includes_word_timestamp_pauses(tmp_path, monkeypatch)
     ]}
     system_prompt = captured["body"]["messages"][0]["content"]
     assert "remove every clearly superseded attempt" in system_prompt
+    assert "Inspect the entire timeline before answering" in system_prompt
+    assert "Do not stop after finding the first edit" in system_prompt
+    assert '"start_block":1' not in system_prompt
 
 
 def test_editorial_cut_must_use_known_block_ids(tmp_path, monkeypatch):
