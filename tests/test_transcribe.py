@@ -88,3 +88,32 @@ def test_recovery_pass_replaces_stretched_opening_words(tmp_path, monkeypatch):
     assert calls[1][calls[1].index("--condition_on_previous_text") + 1] == "False"
     assert "So I'm So I'm" in transcript["text"]
     assert (tmp_path / "cache/transcription-recovery.json").is_file()
+
+
+def test_optional_crisperwhisper_backend(tmp_path, monkeypatch):
+    source = _project(tmp_path)
+    (tmp_path / "config.yaml").write_text(
+        "transcription:\n  engine: crisperwhisper\n  model: medium\n  crisper_backend: transformers\n"
+    )
+    monkeypatch.delenv("VIDPP_TRANSCRIBE_COMMAND", raising=False)
+    monkeypatch.setattr(core.importlib.util, "find_spec", lambda _: object())
+    calls = []
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        (tmp_path / "transcript.json").write_text('{"segments":[{"start":0,"end":1,"text":"um hello","words":[{"word":"um","start":0,"end":0.3},{"word":"hello","start":0.4,"end":1}]}]}')
+    monkeypatch.setattr(core, "run", fake_run)
+
+    core.transcribe(tmp_path)
+    assert calls[0][0] == "ffmpeg"
+    assert calls[1][:3] == [core.sys.executable, "-m", "vidpp.crisper_runner"]
+    assert calls[1][calls[1].index("--backend") + 1] == "transformers"
+    assert calls[1][calls[1].index("--model") + 1] == "medium"
+
+
+def test_missing_crisperwhisper_is_actionable(tmp_path, monkeypatch):
+    _project(tmp_path)
+    (tmp_path / "config.yaml").write_text("transcription:\n  engine: crisperwhisper\n")
+    monkeypatch.delenv("VIDPP_TRANSCRIBE_COMMAND", raising=False)
+    monkeypatch.setattr(core.importlib.util, "find_spec", lambda _: None)
+    with pytest.raises(VidPPError, match=r"crisperwhisper\[transformers\]"):
+        core.transcribe(tmp_path)

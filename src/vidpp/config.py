@@ -11,8 +11,10 @@ from .errors import VidPPError
 
 @dataclass(frozen=True)
 class TranscriptionConfig:
+    engine: str = "whisper"
     model: str = "turbo"
     recovery_model: str = "turbo"
+    crisper_backend: str = "auto"
     language: str = "en"
     phrases: tuple[str, ...] = ()
 
@@ -21,7 +23,7 @@ def transcription_config(project: Path) -> TranscriptionConfig:
     default = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "vidpp/config.yaml"
     explicit = os.environ.get("VIDPP_CONFIG")
     paths = [Path(explicit).expanduser() if explicit else default, project / "config.yaml"]
-    values = {"model": "turbo", "language": "en"}
+    values = {"engine": "whisper", "model": "turbo", "crisper_backend": "auto", "language": "en"}
     recovery_model: str | None = None
     phrases, seen = [], set()
     for path in paths:
@@ -36,7 +38,7 @@ def transcription_config(project: Path) -> TranscriptionConfig:
         if not isinstance(raw, dict) or raw.get("version", 1) != 1 or set(raw) - {"version", "transcription"}:
             raise VidPPError(f"invalid configuration keys/version in {path}")
         section = raw.get("transcription", {})
-        if not isinstance(section, dict) or set(section) - {"model", "recovery_model", "language", "phrases"}:
+        if not isinstance(section, dict) or set(section) - {"engine", "model", "recovery_model", "crisper_backend", "language", "phrases"}:
             raise VidPPError(f"invalid transcription settings in {path}")
         for key in values:
             if key in section:
@@ -59,6 +61,13 @@ def transcription_config(project: Path) -> TranscriptionConfig:
             if phrase.casefold() not in seen:
                 seen.add(phrase.casefold())
                 phrases.append(phrase)
-    model = os.environ.get("VIDPP_WHISPER_MODEL") or values["model"]
+    model = os.environ.get("VIDPP_TRANSCRIBE_MODEL") or os.environ.get("VIDPP_WHISPER_MODEL") or values["model"]
     recovery = os.environ.get("VIDPP_WHISPER_RECOVERY_MODEL") or recovery_model or model
-    return TranscriptionConfig(model, recovery, os.environ.get("VIDPP_WHISPER_LANGUAGE") or values["language"], tuple(phrases))
+    engine = os.environ.get("VIDPP_TRANSCRIBE_ENGINE") or values["engine"]
+    crisper_backend = os.environ.get("VIDPP_CRISPER_BACKEND") or values["crisper_backend"]
+    if engine not in {"whisper", "crisperwhisper"}:
+        raise VidPPError("transcription.engine must be whisper or crisperwhisper")
+    if crisper_backend not in {"auto", "ct2", "transformers"}:
+        raise VidPPError("transcription.crisper_backend must be auto, ct2, or transformers")
+    return TranscriptionConfig(engine, model, recovery, crisper_backend,
+                               os.environ.get("VIDPP_WHISPER_LANGUAGE") or values["language"], tuple(phrases))

@@ -4,6 +4,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 import json
+import importlib.util
 import logging
 import math
 import os
@@ -12,6 +13,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import urllib.request
 
 from .errors import VidPPError
@@ -245,6 +247,36 @@ def transcribe(project: Path) -> None:
         LOG.info("Transcribing with configured local command...")
         result = run([*command, source])
         target.write_text(result.stdout, encoding="utf-8")
+    elif settings.engine == "crisperwhisper":
+        if importlib.util.find_spec("crisperwhisper") is None:
+            raise VidPPError(
+                "CrisperWhisper is not installed. For an AMD/CPU system, install it inside the active venv with "
+                "'python -m pip install \"crisperwhisper[transformers]\"'. Then retry. Review the model license "
+                "before use; standard CrisperWhisper 2 weights are restricted to non-commercial research."
+            )
+        language = settings.language
+        if language.casefold() == "auto":
+            raise VidPPError("CrisperWhisper requires an explicit transcription.language such as en")
+        audio = project / "cache/crisper-audio.wav"
+        LOG.info("Extracting mono audio for CrisperWhisper...")
+        run(["ffmpeg", "-y", "-i", source, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(audio)])
+        command = [
+            sys.executable, "-m", "vidpp.crisper_runner", str(audio), str(target),
+            "--model", settings.model, "--backend", settings.crisper_backend, "--language", language,
+        ]
+        if settings.phrases:
+            if "_pro" in settings.model.casefold():
+                for phrase in settings.phrases: command.extend(["--hotword", phrase])
+            else:
+                LOG.warning("Not passing configured phrases: CrisperWhisper supports hotwords only on licensed Pro models")
+        LOG.warning("CrisperWhisper model weights have separate usage terms; verify that model's license for this project")
+        LOG.info("Loading CrisperWhisper model %s (%s backend) and transcribing in verbatim mode...",
+                 settings.model, settings.crisper_backend)
+        LOG.debug("CrisperWhisper configuration: %s", asdict(settings))
+        write_json(project / "cache/transcription-settings.json", asdict(settings))
+        run(command, capture=False)
+        if not target.is_file():
+            raise VidPPError("CrisperWhisper completed without producing its expected JSON transcript")
     else:
         if not shutil.which("whisper"):
             raise VidPPError(

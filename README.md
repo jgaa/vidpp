@@ -72,7 +72,7 @@ The renderer needs local `ffmpeg`/`ffprobe` with libass and an installed subtitl
 
 ### Local transcription and editorial model
 
-For local use, VidPP transcribes with the local `whisper` executable when no `--transcript` is supplied. Install it only inside the active virtual environment:
+For local use, VidPP uses the configured local transcription engine when no `--transcript` is supplied. OpenAI Whisper is the default. Install it only inside the active virtual environment:
 
 ```bash
 python -m pip install openai-whisper
@@ -89,8 +89,10 @@ Global settings live in `$XDG_CONFIG_HOME/vidpp/config.yaml`, normally `~/.confi
 ```yaml
 version: 1
 transcription:
+  engine: whisper
   model: turbo
   recovery_model: turbo
+  crisper_backend: auto
   language: en
   phrases:
     - VidPP
@@ -98,7 +100,7 @@ transcription:
     - end-to-end encryption
 ```
 
-Project model/language settings override global settings; `VIDPP_WHISPER_MODEL`, `VIDPP_WHISPER_RECOVERY_MODEL`, and `VIDPP_WHISPER_LANGUAGE` override them. Phrase lists are combined in global-then-project order, normalized for Unicode and whitespace, and deduplicated case-insensitively while keeping the first spelling. The combined vocabulary is passed to Whisper as `--initial_prompt`. Keep it focused: Whisper has a limited prompt context and vocabulary hints cannot force a recognition. The effective settings are saved in `cache/transcription-settings.json` and logged at debug level. Whisper documents this prompt as useful for names and vocabulary in its [transcription implementation](https://github.com/openai/whisper/blob/main/whisper/transcribe.py).
+Project transcription settings override global settings; environment variables override both. `VIDPP_TRANSCRIBE_MODEL` selects the model for either engine. The older `VIDPP_WHISPER_MODEL`, plus `VIDPP_WHISPER_RECOVERY_MODEL` and `VIDPP_WHISPER_LANGUAGE`, remain supported. Phrase lists are combined in global-then-project order, normalized for Unicode and whitespace, and deduplicated case-insensitively while keeping the first spelling. The combined vocabulary is passed to Whisper as `--initial_prompt`. Keep it focused: Whisper has a limited prompt context and vocabulary hints cannot force a recognition. The effective settings are saved in `cache/transcription-settings.json` and logged at debug level. Whisper documents this prompt as useful for names and vocabulary in its [transcription implementation](https://github.com/openai/whisper/blob/main/whisper/transcribe.py).
 
 For a new project, supply its configuration before transcription:
 
@@ -110,6 +112,31 @@ vidpp transcribe project/
 ```
 
 The supplied configuration is copied to `project/config.yaml`. For an existing project, edit that file and rerun `vidpp transcribe project/`. VidPP detects suspicious alignment—leading untranscribed audio, words stretched beyond two seconds, or unexplained word gaps—and runs a context-independent Whisper recovery pass only over those regions. A region is replaced only when recovery finds more words, so a weaker second pass cannot silently discard primary text. The raw primary and recovery results remain in `cache/` and `cache/recovery/`; reconciliation details are in `cache/transcription-recovery.json`. By default the recovery pass uses the primary model. Set `recovery_model: large-v3` (or `VIDPP_WHISPER_RECOVERY_MODEL=large-v3`) for higher quality at the cost of a larger model and slower loading. Word timestamps and confidence are retained in `transcript.json`; deterministic sentence grouping is written to `cache/sentences.json`.
+
+### Optional CrisperWhisper transcription
+
+[CrisperWhisper 2](https://github.com/nyrahealth/CrisperWhisper) can replace OpenAI Whisper for verbatim transcription. Its verbatim mode is designed to retain filler words, repetitions, stutters, and false starts, and VidPP requests word-level timestamps. It is optional and is never installed or selected implicitly.
+
+For an AMD system, use the portable Transformers backend inside the VidPP virtual environment:
+
+```bash
+python -m pip install "crisperwhisper[transformers]"
+```
+
+Then configure it globally or in `project/config.yaml`:
+
+```yaml
+version: 1
+transcription:
+  engine: crisperwhisper
+  model: large
+  crisper_backend: transformers
+  language: en
+```
+
+Valid CrisperWhisper 2 model shorthands include `large`, `turbo`, `medium`, and `small`. `VIDPP_TRANSCRIBE_ENGINE=crisperwhisper`, `VIDPP_TRANSCRIBE_MODEL=large`, and `VIDPP_CRISPER_BACKEND=transformers` provide environment overrides. VidPP extracts `cache/crisper-audio.wav` with FFmpeg before inference, so video-container support does not depend on Python audio decoders. The Transformers backend uses PyTorch: it can use an AMD GPU only with a compatible ROCm-enabled PyTorch installation, not through Vulkan, and otherwise runs on CPU. The alternative `ct2` backend's documented GPU path targets NVIDIA CUDA.
+
+Important licensing: CrisperWhisper's inference code is MIT, but its standard model weights use a non-commercial research license. Pro weights require a commercial license. Verify that the selected model's terms fit the intended videos before enabling this backend. VidPP passes configured vocabulary phrases as hotwords only for a `_pro` model because the CrisperWhisper documentation warns that hotwords can degrade standard-model transcription.
 
 ### Captions and reviewing edits
 

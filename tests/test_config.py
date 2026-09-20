@@ -13,6 +13,7 @@ def test_merges_deduplicates_and_overrides(tmp_path, monkeypatch):
     monkeypatch.setenv("VIDPP_CONFIG", str(global_config))
     monkeypatch.delenv("VIDPP_WHISPER_MODEL", raising=False)
     config = transcription_config(project)
+    assert config.engine == "whisper"
     assert config.model == "turbo"
     assert config.recovery_model == "turbo"
     assert config.phrases == ("VidPP", "end to end", "OneRSS")
@@ -27,6 +28,16 @@ def test_recovery_model_can_be_configured(tmp_path, monkeypatch):
     monkeypatch.delenv("VIDPP_WHISPER_MODEL", raising=False)
     monkeypatch.delenv("VIDPP_WHISPER_RECOVERY_MODEL", raising=False)
     assert transcription_config(tmp_path).recovery_model == "large-v3"
+
+
+def test_crisperwhisper_engine_and_backend(tmp_path, monkeypatch):
+    path = tmp_path / "global.yaml"
+    path.write_text('transcription:\n  engine: crisperwhisper\n  model: medium\n  crisper_backend: transformers\n')
+    monkeypatch.setenv("VIDPP_CONFIG", str(path))
+    config = transcription_config(tmp_path)
+    assert config.engine == "crisperwhisper"
+    assert config.model == "medium"
+    assert config.crisper_backend == "transformers"
 
 
 def test_english_is_default(tmp_path, monkeypatch):
