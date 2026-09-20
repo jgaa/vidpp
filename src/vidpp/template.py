@@ -50,7 +50,7 @@ class Template:
     background: Path | None = None
     subtitles_enabled: bool = True
     subtitle_font: str = "Noto Sans"
-    subtitle_font_size: int = 54
+    subtitle_font_size: int = 44
     subtitle_color: str = "#FFFFFF"
     subtitle_outline_color: str = "#000000"
     subtitle_outline_width: int = 3
@@ -82,6 +82,9 @@ def load_template(path: Path | None, hook_override: str | None = None) -> Templa
     output, video, subtitles = _mapping(data.get("output"), "output"), _mapping(data.get("video"), "video"), _mapping(data.get("subtitles"), "subtitles")
     hook, audio, editing = _mapping(data.get("hook"), "hook"), _mapping(data.get("audio"), "audio"), _mapping(data.get("editing"), "editing")
     width, height = int(_positive(output.get("width"), "output.width", 1080)), int(_positive(output.get("height"), "output.height", 1920))
+    # Defaults scale with output width; explicit font sizes remain output pixels.
+    subtitles.setdefault("font_size", max(12, round(width * 44 / 1080)))
+    subtitles.setdefault("bottom_margin", max(8, round(height * 180 / 1920)))
     fps = output.get("fps", "source")
     if fps != "source": _positive(fps, "output.fps", 30)
     fit = video.get("fit", "contain")

@@ -35,7 +35,55 @@ For local use, VidPP transcribes with the local `whisper` executable when no `--
 python -m pip install openai-whisper
 ```
 
-FFmpeg is also required. Select a local Whisper model with `VIDPP_WHISPER_MODEL` (defaults to `base`) and optionally set `VIDPP_WHISPER_LANGUAGE`, for example `export VIDPP_WHISPER_MODEL=small`. If Whisper is unavailable, VidPP prints these instructions and exits without rendering. Alternatives are to pass a timestamped `--transcript`, or set `VIDPP_TRANSCRIBE_COMMAND` to a local executable that accepts the source-video path as its final argument and writes compatible transcript JSON to stdout. VidPP invokes that command as an argument array, never through a shell.
+FFmpeg is also required. The default Whisper model is now `turbo`, with word timestamps enabled. It offers a stronger transcription starting point than the previous `base` default, but does not guarantee recognition of every word. Set `VIDPP_WHISPER_MODEL=large-v3` to try the full model, or `small` for lower resource use. Set `VIDPP_WHISPER_LANGUAGE=en` to select English explicitly. Model weights may be downloaded on first use; speech processing stays local. The Python Whisper runtime uses PyTorch; llama.cpp's Vulkan acceleration does not enable Vulkan for Python Whisper. See the [Whisper model comparison](https://github.com/openai/whisper#available-models-and-languages).
+
+If Whisper is unavailable, VidPP prints install instructions and exits without rendering. Alternatives are a timestamped `--transcript`, or `VIDPP_TRANSCRIBE_COMMAND` pointing to a local executable that accepts the source-video path as its final argument and writes compatible transcript JSON to stdout. That adapter controls its own model/prompt settings. VidPP invokes it as an argument array, never through a shell.
+
+### Transcription configuration and vocabulary
+
+Global settings live in `$XDG_CONFIG_HOME/vidpp/config.yaml`, normally `~/.config/vidpp/config.yaml`. `VIDPP_CONFIG=/path/to/config.yaml` overrides that location. Each project can also contain `config.yaml`. Both accept this schema (see `config.example.yaml`):
+
+```yaml
+version: 1
+transcription:
+  model: turbo
+  language: en
+  phrases:
+    - VidPP
+    - OneRSS
+    - end-to-end encryption
+```
+
+Project model/language settings override global settings; `VIDPP_WHISPER_MODEL` and `VIDPP_WHISPER_LANGUAGE` override both. Phrase lists are combined in global-then-project order, normalized for Unicode and whitespace, and deduplicated case-insensitively while keeping the first spelling. The combined vocabulary is passed to Whisper as `--initial_prompt`. Keep it focused: Whisper has a limited prompt context and vocabulary hints cannot force a recognition. The effective settings are saved in `cache/transcription-settings.json` and logged at debug level. Whisper documents this prompt as useful for names and vocabulary in its [transcription implementation](https://github.com/openai/whisper/blob/main/whisper/transcribe.py).
+
+For a new project, supply its configuration before transcription:
+
+```bash
+vidpp process source.mp4 --project-config recording-config.yaml
+# Or set up stages separately:
+vidpp import source.mp4 project/ --project-config recording-config.yaml
+vidpp transcribe project/
+```
+
+The supplied configuration is copied to `project/config.yaml`. For an existing project, edit that file and rerun `vidpp transcribe project/`. Raw Whisper JSON remains in `cache/`; word timestamps and confidence are retained in `transcript.json`. A deterministic second stage groups words into sentences in `cache/sentences.json`; it does not run a second recognizer or change the words.
+
+### Captions and reviewing edits
+
+Captions use actual word boundaries and font-measured line breaks, with up to the configured `subtitles.max_lines`. Font lookup requires `fontconfig` (`sudo apt-get install fontconfig` on Debian/Ubuntu). The default font size is 44 pixels at 1080-pixel output width and scales with the output width; an explicit `subtitles.font_size` is always in output pixels. Sentence grouping and short caption grouping are separate operations. Install updated dependencies in your active venv with `python -m pip install -e .`.
+
+Legacy transcripts without words use estimated caption timing with a warning. Edits crossing such a segment, or cutting through a timestamped word, stop rendering with an actionable error. Retranscribe older projects for reliable alignment.
+
+LLM proposals are now saved with `enabled: false` and require review before setting `enabled: true` in `edit.json`. Valid JSON does not guarantee sensible editorial reasoning. Existing plans are not silently changed; regenerate or disable old incorrect operations. After changing a transcript, regenerate and review its plan before rendering:
+
+```bash
+vidpp transcribe project/
+vidpp analyze project/
+vidpp plan project/
+# Review edit.json; enable only justified cuts.
+vidpp render project/
+```
+
+Pass the same `--template` to stages that use a visual/editing template.
 
 Optional editorial analysis uses a local OpenAI-compatible server only when both variables are set:
 

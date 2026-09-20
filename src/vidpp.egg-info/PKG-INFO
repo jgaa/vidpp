@@ -5,4 +5,5 @@ Summary: Local, deterministic social-video post-processing
 Requires-Python: >=3.12
 License-File: LICENSE
 Requires-Dist: PyYAML>=6.0
+Requires-Dist: Pillow>=10.0
 Dynamic: license-file

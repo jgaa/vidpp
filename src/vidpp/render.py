@@ -8,6 +8,7 @@ from .core import project_data, run
 from .errors import VidPPError
 from .models import EditOperation, TranscriptSegment, load_edit_plan, load_transcript
 from .template import Template
+from .captions import caption_chunks, caption_font, remap_transcript
 
 LOG = logging.getLogger(__name__)
 
@@ -23,31 +24,6 @@ def _ass_text(text: str) -> str:
     return text.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}").replace("\n", r"\N")
 
 
-def caption_chunks(segments: list[TranscriptSegment], max_lines: int = 2) -> list[TranscriptSegment]:
-    """Split on words, retaining the original spoken text and proportional timing."""
-    chunks: list[TranscriptSegment] = []
-    limit = max_lines * 42
-    for segment in segments:
-        words = segment.text.split()
-        current: list[str] = []
-        for word in words:
-            if current and len(" ".join([*current, word])) > limit:
-                text = " ".join(current)
-                chunks.append(TranscriptSegment(segment.start, segment.end, text))
-                current = [word]
-            else: current.append(word)
-        if current: chunks.append(TranscriptSegment(segment.start, segment.end, " ".join(current)))
-    # Allocate each original segment's chunks across its original duration.
-    result: list[TranscriptSegment] = []
-    for segment in segments:
-        same = [item for item in chunks if item.start == segment.start and item.end == segment.end]
-        for index, item in enumerate(same):
-            start = segment.start + (segment.end - segment.start) * index / len(same)
-            end = segment.start + (segment.end - segment.start) * (index + 1) / len(same)
-            result.append(TranscriptSegment(start, end, item.text))
-    return result
-
-
 def write_ass(path: Path, transcript: list[TranscriptSegment], template: Template) -> None:
     color = "&H00" + template.subtitle_color[5:7] + template.subtitle_color[3:5] + template.subtitle_color[1:3]
     outline = "&H00" + template.subtitle_outline_color[5:7] + template.subtitle_outline_color[3:5] + template.subtitle_outline_color[1:3]
@@ -57,21 +33,15 @@ def write_ass(path: Path, transcript: list[TranscriptSegment], template: Templat
     if template.hook_enabled and template.hook_text:
         lines.append(f"Dialogue: 0,0:00:00.00,{_ass_time(template.hook_duration)},Hook,,0,0,0,,{_ass_text(template.hook_text)}")
     if template.subtitles_enabled:
-        for item in caption_chunks(transcript, template.subtitle_max_lines): lines.append(f"Dialogue: 0,{_ass_time(item.start)},{_ass_time(item.end)},Caption,,0,0,0,,{_ass_text(item.text)}")
+        font = caption_font(template.subtitle_font, template.subtitle_font_size)
+        margin = max(8, round(template.width * 80 / 1080))
+        # Disable automatic wrapping; line breaks below are measured against the font.
+        lines.insert(2, "WrapStyle: 2")
+        lines = [line.replace(",80,80,", f",{margin},{margin},") if line.startswith("Style:") else line for line in lines]
+        available = template.width - 2 * margin - 2 * template.subtitle_outline_width
+        for item in caption_chunks(transcript, template.subtitle_max_lines, font=font, width=available):
+            lines.append(f"Dialogue: 0,{_ass_time(item.start)},{_ass_time(item.end)},Caption,,0,0,0,,{_ass_text(item.text)}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def remap_transcript(transcript: list[TranscriptSegment], ranges: list[tuple[float, float]]) -> list[TranscriptSegment]:
-    """Drop words in removed ranges and translate retained captions to output time."""
-    output_start = 0.0
-    result: list[TranscriptSegment] = []
-    for range_start, range_end in ranges:
-        for item in transcript:
-            start, end = max(item.start, range_start), min(item.end, range_end)
-            if end > start:
-                result.append(TranscriptSegment(output_start + start - range_start, output_start + end - range_start, item.text))
-        output_start += range_end - range_start
-    return result
 
 
 def timeline_ranges(operations: list[EditOperation], duration: float) -> list[tuple[float, float]]:

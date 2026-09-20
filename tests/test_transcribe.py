@@ -33,4 +33,28 @@ def test_whisper_fallback_saves_its_json(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "run", fake_run)
     core.transcribe(tmp_path)
     assert calls[0][:3] == ["whisper", str(source), "--model"]
+    assert calls[0][calls[0].index("--word_timestamps") + 1] == "True"
     assert (tmp_path / "transcript.json").is_file()
+
+
+def test_deduplicated_phrases_are_passed_as_one_argument(tmp_path, monkeypatch):
+    _project(tmp_path)
+    monkeypatch.delenv("VIDPP_TRANSCRIBE_COMMAND", raising=False)
+    path = tmp_path / "global.yaml"
+    path.write_text('transcription:\n  phrases: [VidPP, vidpp, "private messages"]\n')
+    monkeypatch.setenv("VIDPP_CONFIG", str(path))
+    monkeypatch.setattr(core.shutil, "which", lambda _: "/venv/bin/whisper")
+    def fake_run(command, **kwargs):
+        assert command[command.index("--initial_prompt") + 1] == "VidPP, private messages"
+        (tmp_path / "cache/source.json").write_text('{"segments":[]}')
+    monkeypatch.setattr(core, "run", fake_run)
+    core.transcribe(tmp_path)
+
+
+def test_failed_whisper_is_actionable(monkeypatch):
+    import subprocess
+    def fail(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, ["whisper"])
+    monkeypatch.setattr(core.subprocess, "run", fail)
+    with pytest.raises(VidPPError, match="command failed"):
+        core.run(["whisper"], capture=False)

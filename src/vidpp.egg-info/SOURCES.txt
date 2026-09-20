@@ -2,7 +2,9 @@ LICENSE
 README.md
 pyproject.toml
 src/vidpp/__init__.py
+src/vidpp/captions.py
 src/vidpp/cli.py
+src/vidpp/config.py
 src/vidpp/core.py
 src/vidpp/errors.py
 src/vidpp/models.py
@@ -17,3 +19,4 @@ src/vidpp.egg-info/top_level.txt
 tests/test_models.py
 tests/test_render.py
 tests/test_template.py
+tests/test_transcribe.py

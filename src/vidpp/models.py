@@ -16,10 +16,32 @@ def _number(value: Any, name: str, *, minimum: float = 0) -> float:
 
 
 @dataclass(frozen=True)
+class TranscriptWord:
+    start: float
+    end: float
+    word: str
+    probability: float | None = None
+
+    @classmethod
+    def from_dict(cls, raw: Any) -> "TranscriptWord":
+        if not isinstance(raw, dict):
+            raise VidPPError("word must be an object")
+        start, end = _number(raw.get("start"), "word.start"), _number(raw.get("end"), "word.end")
+        word = raw.get("word")
+        if end < start or not isinstance(word, str) or not word.strip():
+            raise VidPPError("invalid word text or timestamp range")
+        probability = raw.get("probability")
+        if probability is not None and _number(probability, "word.probability") > 1:
+            raise VidPPError("word probability must be <= 1")
+        return cls(start, end, word, probability)
+
+
+@dataclass(frozen=True)
 class TranscriptSegment:
     start: float
     end: float
     text: str
+    words: tuple[TranscriptWord, ...] = ()
 
     @classmethod
     def from_dict(cls, raw: Any) -> "TranscriptSegment":
@@ -32,7 +54,15 @@ class TranscriptSegment:
             raise VidPPError("segment.end must be after segment.start")
         if not isinstance(text, str) or not text.strip():
             raise VidPPError("segment.text must be a non-empty string")
-        return cls(start, end, text.strip())
+        raw_words = raw.get("words", [])
+        if not isinstance(raw_words, list):
+            raise VidPPError("segment.words must be an array")
+        words = tuple(TranscriptWord.from_dict(item) for item in raw_words)
+        if any(b.start < a.start for a, b in zip(words, words[1:])):
+            raise VidPPError("words must be sorted by start time")
+        if any(w.start < start - .02 or w.end > end + .02 for w in words):
+            raise VidPPError("word timestamps must lie inside their segment")
+        return cls(start, end, text.strip(), words)
 
 
 @dataclass(frozen=True)
