@@ -107,7 +107,7 @@ changed without rendering the video again. An implementation may use:
 cache/edited-master.mkv
 cache/edited-audio.flac
 cache/processed-audio.flac
-output/final.mp4
+output/final.mp4  # default; final output may be redirected
 ```
 
 Artifact names and containers are implementation details, not part of the

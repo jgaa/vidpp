@@ -135,6 +135,11 @@ The source file must never be modified.
 
 # 5. Project Structure
 
+The global application configuration defines `projects_dir`, defaulting to
+`~/.local/vidpp/projects`. Relative project names are created and resolved
+under this directory; absolute project paths remain supported. The `list`
+command prints valid immediate child projects in deterministic name order.
+
 Create a project directory similar to:
 
 ```text
@@ -532,6 +537,13 @@ into the final video.
 
 Rendering must be deterministic.
 
+The global application configuration may define `output_file_dir`. When set,
+final renders default to `<output_file_dir>/<project-name>.mp4`; when absent,
+they remain at `<project>/output/final.mp4`. `process --output-file PATH` and
+`render --output-file PATH` override both defaults with a complete MP4 path.
+The destination parent is created as needed. A render must never overwrite an
+original or active source-media file. Preview output is not redirected.
+
 The `process` and `render` commands accept `--open`. After a successful render,
 the CLI launches the completed video asynchronously through the operating
 system's default file association. Viewer launching is a CLI convenience and
@@ -778,7 +790,7 @@ the program should:
 9. display the hook using the supplied hook graphic;
 10. render readable subtitles using the configured font/style;
 11. normalize audio;
-12. produce `output/final.mp4`.
+12. produce the final MP4 at the configured or explicitly selected destination.
 
 The resulting project must retain enough intermediate information that individual decisions can be inspected and the video can be rerendered without rerunning transcription or the LLM.
 

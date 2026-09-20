@@ -6,7 +6,8 @@ import subprocess
 import pytest
 
 from vidpp import cli
-from vidpp.cli import _prepare_project_destination, parser
+from vidpp.cli import _list_projects, _output_file, _prepare_project_destination, _resolve_project, parser
+from vidpp.config import AppConfig
 from vidpp.core import _validate_matching_sources, create_project, project_data, project_hook, save_project_hook
 from vidpp.errors import VidPPError
 
@@ -22,6 +23,38 @@ def _video(path: Path, *, size: str = "160x90", frequency: int = 440) -> None:
 def test_cli_accepts_ordered_sources():
     args = parser().parse_args(["process", "first.mp4", "second.mp4", "--project", "combined.vidpp"])
     assert args.sources == [Path("first.mp4"), Path("second.mp4")]
+
+
+def test_project_and_output_paths_use_app_config(tmp_path):
+    projects = tmp_path / "projects"
+    config = AppConfig(projects, tmp_path / "exports")
+    assert _resolve_project(Path("demo.vidpp"), projects, existing=False) == (projects / "demo.vidpp").resolve()
+    absolute = tmp_path / "elsewhere/demo.vidpp"
+    assert _resolve_project(absolute, projects, existing=False) == absolute.resolve()
+    assert _output_file(projects / "demo.vidpp", None, config) == tmp_path / "exports/demo.mp4"
+    assert _output_file(projects / "demo.vidpp", tmp_path / "archive/post.mp4", config) == (tmp_path / "archive/post.mp4").resolve()
+
+
+def test_list_projects_returns_only_valid_sorted_projects(tmp_path):
+    projects = tmp_path / "projects"
+    for name in ("Zulu.vidpp", "alpha.vidpp"):
+        item = projects / name
+        item.mkdir(parents=True)
+        (item / "project.json").write_text("{}")
+    (projects / "not-a-project").mkdir()
+    assert [item.name for item in _list_projects(projects)] == ["alpha.vidpp", "Zulu.vidpp"]
+
+
+def test_list_command_uses_configured_projects_dir(tmp_path, monkeypatch, capsys):
+    projects = tmp_path / "projects"
+    project = projects / "demo.vidpp"
+    project.mkdir(parents=True)
+    (project / "project.json").write_text("{}")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f"version: 1\nprojects_dir: {projects}\n")
+    monkeypatch.setenv("VIDPP_CONFIG", str(config_path))
+    assert cli.main(["list"]) == 0
+    assert capsys.readouterr().out == "demo.vidpp\n"
 
 
 def test_cli_project_name_adds_suffix_and_accepts_replace():
@@ -41,11 +74,13 @@ def test_cli_rejects_project_name_paths():
 
 
 def test_render_cli_accepts_no_edit():
-    args = parser().parse_args(["render", "demo.vidpp", "--no-edit", "--open"])
+    args = parser().parse_args(["render", "demo.vidpp", "--no-edit", "--open", "--output-file", "/archive/post.mp4"])
     assert args.no_edit is True
     assert args.open is True
-    process = parser().parse_args(["process", "source.mp4", "--open"])
+    assert args.output_file == Path("/archive/post.mp4")
+    process = parser().parse_args(["process", "source.mp4", "--open", "--output-file", "/archive/post.mp4"])
     assert process.open is True
+    assert process.output_file == Path("/archive/post.mp4")
 
 
 def test_open_video_uses_default_desktop_launcher(tmp_path, monkeypatch):
@@ -103,14 +138,21 @@ def test_render_uses_and_updates_saved_project_hook(tmp_path, monkeypatch):
         "hook": "Saved hook",
     }))
     rendered = []
+    render_options = []
     opened = []
     monkeypatch.setattr(cli, "refresh_source_metadata", lambda unused: {"width": 1080, "height": 1920})
-    monkeypatch.setattr(cli, "render", lambda unused_project, template, **unused: rendered.append(template) or project / "output/final.mp4")
+    def fake_render(unused_project, template, **options):
+        rendered.append(template)
+        render_options.append(options)
+        return options.get("output_file") or project / "output/final.mp4"
+    monkeypatch.setattr(cli, "render", fake_render)
     monkeypatch.setattr(cli, "open_video", opened.append)
 
-    assert cli.main(["render", str(project), "--open"]) == 0
+    archive = tmp_path / "archive/post.mp4"
+    assert cli.main(["render", str(project), "--open", "--output-file", str(archive)]) == 0
     assert rendered[-1].hook_text == "Saved hook"
-    assert opened == [project / "output/final.mp4"]
+    assert render_options[-1]["output_file"] == archive.resolve()
+    assert opened == [archive.resolve()]
 
     assert cli.main(["render", str(project), "--hook", "Replacement hook"]) == 0
     assert rendered[-1].hook_text == "Replacement hook"
@@ -162,9 +204,10 @@ def test_process_saves_hook_in_new_project(tmp_path, monkeypatch):
 
 def test_root_help_lists_command_options():
     help_text = parser().format_help()
-    for option in ("--no-edit", "--open", "--project-name", "--replace-project", "--transcript", "--template", "--format"):
+    for option in ("--no-edit", "--open", "--output-file", "--project-name", "--replace-project", "--transcript", "--template", "--format"):
         assert option in help_text
     assert "command options:" in help_text
+    assert "list projects" in help_text
 
 
 def test_replace_project_removes_only_exact_destination(tmp_path):

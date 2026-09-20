@@ -1,4 +1,11 @@
 version: 1
+
+# Relative project names are created and looked up here.
+projects_dir: ~/.local/vidpp/projects
+
+# Optional. Omit this to keep final videos in each project's output directory.
+# output_file_dir: ~/Videos
+
 transcription:
   engine: whisper  # Or crisperwhisper for optional verbatim transcription.
   model: turbo

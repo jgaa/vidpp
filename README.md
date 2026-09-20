@@ -58,7 +58,13 @@ vidpp preview project.vidpp --no-edit
 
 All Python packages are installed in `.venv`; the machine's shared Python environment is not changed. On Debian/Ubuntu, install the matching `python3-venv` package first if `python3 -m venv` reports that `ensurepip` is unavailable. To run tests, use `python -m pip install pytest` and then `python -m pytest` while the environment is active.
 
-`transcript.json` contains timestamped segments, for example `{"segments":[{"start":0.0,"end":2.2,"text":"A short spoken sentence."}]}`. VidPP creates `source.vidpp/` by default, references rather than copies the source, retains the transcript, analysis and semantic edit plan, and writes `output/final.mp4`. Individual stages are `import`, `transcribe`, `analyze`, `plan`, `preview`, and `render`.
+`transcript.json` contains timestamped segments, for example `{"segments":[{"start":0.0,"end":2.2,"text":"A short spoken sentence."}]}`. By default VidPP creates `~/.local/vidpp/projects/source.vidpp/`, references rather than copies the source, retains the transcript, analysis and semantic edit plan, and writes `output/final.mp4` inside that project. Individual stages are `import`, `transcribe`, `analyze`, `plan`, `preview`, and `render`.
+
+List projects in the configured project directory with:
+
+```bash
+vidpp list
+```
 
 ### Multiple source videos
 
@@ -82,7 +88,7 @@ vidpp render combined.vidpp
 
 Multiple inputs are normalized and concatenated into `cache/master.mp4`. Transcription, analysis, semantic edits, captions, and rendering use that continuous master timeline. The original videos are only read. `project.json` retains the project hook, every original absolute path, its inspected metadata, and its start/end on the master timeline. If the cached master is deleted, VidPP rebuilds it from the originals.
 
-Use `--project-name` when only a local project name is needed; VidPP appends `.vidpp`. Use `--project` for an explicit destination path. `--replace-project` removes an existing destination before recreating it:
+Use `--project-name` when only a project name is needed; VidPP appends `.vidpp` and creates it under `projects_dir`. A relative `--project` or staged-command project argument is also resolved under `projects_dir`; use an absolute path for a project elsewhere. `--replace-project` removes an existing destination before recreating it:
 
 ```bash
 vidpp process source.mp4 --project-name fresh-take --replace-project
@@ -94,6 +100,19 @@ Replacement is destructive for the destination project directory. VidPP refuses 
 For now, inputs must have matching displayed dimensions, compatible nominal frame rates, and audio. VidPP compares frame rates numerically with a 5% tolerance because phone recordings commonly report slightly different average-rate fractions for the same nominal mode; genuinely different rates such as 24 fps and 30 fps remain incompatible. FFmpeg reports other incompatible stream details. A single source continues to be referenced directly without creating a master. Without `--project`, a multi-source project is named after the first input.
 
 ### Output size and orientation
+
+By default final renders stay in `<project>/output/final.mp4`. Set
+`output_file_dir` in the application configuration to export final renders as
+`<output_file_dir>/<project-name>.mp4`, or select the complete destination for
+one command:
+
+```bash
+vidpp process source.mp4 --output-file ~/Videos/social/archive/post-001.mp4
+vidpp render source.vidpp --output-file ~/Videos/social/archive/post-001.mp4
+```
+
+VidPP creates the destination directory when needed and refuses to overwrite
+any source-media file. Preview files always remain inside the project.
 
 The default destination is `p720` with automatic orientation. A landscape source produces 1280×720; a portrait source produces 720×1280. Auto treats a square source as landscape. The `p` value is the short edge of a 16:9 output and may be overridden for the complete pipeline or an individual render:
 
@@ -128,10 +147,13 @@ If Whisper is unavailable, VidPP prints install instructions and exits without r
 
 ### Transcription configuration and vocabulary
 
-Global settings live in `$XDG_CONFIG_HOME/vidpp/config.yaml`, normally `~/.config/vidpp/config.yaml`. `VIDPP_CONFIG=/path/to/config.yaml` overrides that location. Each project can also contain `config.yaml`. Both accept this schema (see `config.example.yaml`):
+Global settings live in `$XDG_CONFIG_HOME/vidpp/config.yaml`, normally `~/.config/vidpp/config.yaml`. `VIDPP_CONFIG=/path/to/config.yaml` overrides that location. The global configuration accepts application paths and transcription settings (see `config.example.yaml`):
 
 ```yaml
 version: 1
+projects_dir: ~/.local/vidpp/projects
+output_file_dir: ~/Videos
+
 transcription:
   engine: whisper
   model: turbo
@@ -143,6 +165,13 @@ transcription:
     - OneRSS
     - end-to-end encryption
 ```
+
+`projects_dir` defaults to `~/.local/vidpp/projects`. `output_file_dir` has no
+default; omit it to keep final renders in each project. Relative configured
+paths are resolved from the directory containing the global configuration.
+Each project may also contain `config.yaml`, but project-local configuration is
+limited to the `version` and `transcription` keys and cannot redirect global
+project or export locations.
 
 Project transcription settings override global settings; environment variables override both. `VIDPP_TRANSCRIBE_MODEL` selects the model for either engine. The older `VIDPP_WHISPER_MODEL`, plus `VIDPP_WHISPER_RECOVERY_MODEL` and `VIDPP_WHISPER_LANGUAGE`, remain supported. Phrase lists are combined in global-then-project order, normalized for Unicode and whitespace, and deduplicated case-insensitively while keeping the first spelling. The combined vocabulary is passed to Whisper as `--initial_prompt`. Keep it focused: Whisper has a limited prompt context and vocabulary hints cannot force a recognition. The effective settings are saved in `cache/transcription-settings.json` and logged at debug level. Whisper documents this prompt as useful for names and vocabulary in its [transcription implementation](https://github.com/openai/whisper/blob/main/whisper/transcribe.py).
 

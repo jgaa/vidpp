@@ -11,6 +11,7 @@ import shutil
 import tempfile
 
 from .core import analyze, create_project, plan, project_hook, refresh_source_metadata, save_project_hook, save_transcript, transcribe
+from .config import AppConfig, app_config
 from .errors import VidPPError
 from .render import render
 from .template import load_template
@@ -35,13 +36,42 @@ class VidPPArgumentParser(argparse.ArgumentParser):
         return "\n".join(sections) + "\n"
 
 
-def _project(value: str) -> Path: return Path(value).resolve()
+def _project(value: str) -> Path: return Path(value).expanduser()
 
 
 def _project_name(value: str) -> Path:
     if not value or value in {".", "..", ".vidpp"} or Path(value).name != value or "/" in value or "\\" in value:
         raise argparse.ArgumentTypeError("project name must be one directory name without path separators")
     return Path(value if value.endswith(".vidpp") else value + ".vidpp")
+
+
+def _resolve_project(value: Path, projects_dir: Path, *, existing: bool) -> Path:
+    project = value.expanduser()
+    if not project.is_absolute():
+        project = projects_dir / project
+    project = project.resolve()
+    if existing and not project.exists() and project.suffix != ".vidpp":
+        suffixed = project.with_name(project.name + ".vidpp")
+        if suffixed.exists():
+            project = suffixed
+    return project
+
+
+def _output_file(project: Path, explicit: Path | None, config: AppConfig) -> Path | None:
+    if explicit is not None:
+        return explicit.expanduser().resolve()
+    if config.output_file_dir is not None:
+        return config.output_file_dir / f"{project.stem}.mp4"
+    return None
+
+
+def _list_projects(projects_dir: Path) -> list[Path]:
+    if not projects_dir.exists():
+        return []
+    if not projects_dir.is_dir():
+        raise VidPPError(f"projects_dir is not a directory: {projects_dir}")
+    projects = [item for item in projects_dir.iterdir() if item.is_dir() and (item / "project.json").is_file()]
+    return sorted(projects, key=lambda item: item.name.casefold())
 
 
 def _prepare_project_destination(project: Path, sources: list[Path], replace: bool) -> None:
@@ -111,6 +141,7 @@ def parser() -> argparse.ArgumentParser:
     app = VidPPArgumentParser(prog="vidpp", description="Local, deterministic social-video post-processing")
     app.add_argument("-v", "--verbose", action="count", default=0)
     commands = app.add_subparsers(dest="command", required=True)
+    commands.add_parser("list", help="list projects in the configured projects directory")
     import_cmd = commands.add_parser("import", help="create a project without copying source media")
     import_cmd.add_argument("sources", type=Path, nargs="+"); import_cmd.add_argument("project", type=Path)
     import_cmd.add_argument("--project-config", type=Path)
@@ -124,6 +155,7 @@ def parser() -> argparse.ArgumentParser:
             cmd.add_argument("--no-edit", action="store_true", help="ignore edit.json and keep the complete timeline")
         if name == "render":
             cmd.add_argument("--open", action="store_true", help="open the completed video in the default viewer")
+            cmd.add_argument("--output-file", type=Path, help="write the final MP4 to this path")
     process = commands.add_parser("process", help="run the complete pipeline")
     process.add_argument("sources", type=Path, nargs="+")
     destination = process.add_mutually_exclusive_group()
@@ -132,6 +164,7 @@ def parser() -> argparse.ArgumentParser:
     process.add_argument("--replace-project", action="store_true", help="remove and recreate the destination project")
     process.add_argument("--no-edit", action="store_true", help="skip edit analysis/planning and keep the complete timeline")
     process.add_argument("--open", action="store_true", help="open the completed video in the default viewer")
+    process.add_argument("--output-file", type=Path, help="write the final MP4 to this path")
     process.add_argument("--template", type=Path); process.add_argument("--hook"); process.add_argument("--transcript", type=Path)
     process.add_argument("--project-config", type=Path)
     process.add_argument("--format", dest="output_format", metavar="p720")
@@ -143,9 +176,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(message)s")
     try:
+        config = app_config()
+        LOG.debug("Application paths: projects_dir=%s, output_file_dir=%s", config.projects_dir, config.output_file_dir)
+        if args.command == "list":
+            for project in _list_projects(config.projects_dir):
+                print(project.name)
+            return 0
         if args.command in {"import", "process"} and args.project_config and not args.project_config.is_file():
             raise VidPPError(f"project configuration does not exist: {args.project_config}")
         if args.command == "import":
+            args.project = _resolve_project(args.project, config.projects_dir, existing=False)
             LOG.info("Inspecting source and creating project...")
             _prepare_project_destination(args.project, args.sources, args.replace_project)
             create_project(args.sources, args.project)
@@ -153,7 +193,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Created project: {args.project}")
             return 0
         if args.command == "process":
-            project = args.project or args.project_name or Path(args.sources[0].stem + ".vidpp")
+            project_value = args.project or args.project_name or Path(args.sources[0].stem + ".vidpp")
+            project = _resolve_project(project_value, config.projects_dir, existing=False)
             LOG.info("Inspecting source and creating project...")
             _prepare_project_destination(project, args.sources, args.replace_project)
             metadata = create_project(args.sources, project)
@@ -176,7 +217,12 @@ def main(argv: list[str] | None = None) -> int:
                 LOG.info("Planning edits...")
                 operations = plan(project, template)
             LOG.info("Rendering final video...")
-            target = render(project, template, apply_edits=not args.no_edit)
+            target = render(
+                project,
+                template,
+                apply_edits=not args.no_edit,
+                output_file=_output_file(project, args.output_file, config),
+            )
             if args.open:
                 open_video(target)
             if args.no_edit:
@@ -184,6 +230,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             enabled = sum(item.enabled and item.type != "review" for item in operations)
             print(f"{len(operations)} proposed edits, {enabled} enabled. Done: {target}"); return 0
+        args.project = _resolve_project(args.project, config.projects_dir, existing=True)
         if args.command == "transcribe":
             if args.hook is not None:
                 save_project_hook(args.project, args.hook)
@@ -215,7 +262,13 @@ def main(argv: list[str] | None = None) -> int:
             template = load_template(args.template, hook, source_width=metadata["width"], source_height=metadata["height"], output_format=args.output_format, orientation=args.orientation)
             _save_effective_hook(args.project, template.hook_text, hook)
             LOG.info("Output format: %dx%d", template.width, template.height)
-            target = render(args.project, template, preview=args.command == "preview", apply_edits=not args.no_edit)
+            target = render(
+                args.project,
+                template,
+                preview=args.command == "preview",
+                apply_edits=not args.no_edit,
+                output_file=_output_file(args.project, args.output_file, config) if args.command == "render" else None,
+            )
             if args.command == "render" and args.open:
                 open_video(target)
             print(f"Done: {target}")

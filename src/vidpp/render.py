@@ -215,7 +215,39 @@ def build_filter(source_duration: float, operations: list[EditOperation], templa
     return ";".join(parts)
 
 
-def render(project: Path, template: Template, *, preview: bool = False, apply_edits: bool = True) -> Path:
+def render_target(project: Path, data: dict, *, preview: bool, output_file: Path | None) -> Path:
+    if preview:
+        if output_file is not None:
+            raise VidPPError("preview does not support a final output file override")
+        return project / "previews/preview.mp4"
+    target = (output_file.expanduser().resolve() if output_file is not None else project / "output/final.mp4")
+    if target.suffix.casefold() != ".mp4":
+        raise VidPPError("output file must use the .mp4 extension")
+    if target.exists() and target.is_dir():
+        raise VidPPError(f"output file is a directory: {target}")
+    source_paths = {Path(data["source_path"]).resolve()}
+    source_paths.update(
+        Path(item["path"]).resolve()
+        for item in data.get("sources", [])
+        if isinstance(item, dict) and isinstance(item.get("path"), str)
+    )
+    if target.resolve() in source_paths:
+        raise VidPPError("output file must not overwrite source media")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise VidPPError(f"cannot create output directory {target.parent}: {exc}") from exc
+    return target
+
+
+def render(
+    project: Path,
+    template: Template,
+    *,
+    preview: bool = False,
+    apply_edits: bool = True,
+    output_file: Path | None = None,
+) -> Path:
     data = project_data(project)
     transcript = load_transcript(project / "transcript.json")
     stored_operations = load_edit_plan(project / "edit.json", float(data["source"]["duration"])) if (project / "edit.json").exists() else []
@@ -223,7 +255,7 @@ def render(project: Path, template: Template, *, preview: bool = False, apply_ed
     if not apply_edits:
         LOG.info("Editing disabled; ignoring %d stored edit operations and keeping the complete timeline.", len(stored_operations))
     ass_path = project / "cache" / "captions.ass"
-    target = project / ("previews/preview.mp4" if preview else "output/final.mp4")
+    target = render_target(project, data, preview=preview, output_file=output_file)
     ranges = timeline_ranges(operations, float(data["source"]["duration"]))
     log_edit_summary(operations, float(data["source"]["duration"]), ranges)
     generated_hook = None

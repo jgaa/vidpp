@@ -1,7 +1,9 @@
 from PIL import Image
+import pytest
 
+from vidpp.errors import VidPPError
 from vidpp.models import EditOperation, TranscriptSegment
-from vidpp.render import build_filter, log_edit_summary, remap_transcript, render_hook_bubble, timeline_ranges, write_ass
+from vidpp.render import build_filter, log_edit_summary, remap_transcript, render_hook_bubble, render_target, timeline_ranges, write_ass
 from vidpp.template import Template
 
 
@@ -21,6 +23,25 @@ def test_hook_overlay_is_duration_bounded_and_does_not_truncate_video(tmp_path):
     assert "eof_action=repeat:repeatlast=1" in graph
     assert "enable='between(t,0,3.500)'" in graph
     assert "shortest=1:enable" not in graph
+
+
+def test_custom_render_target_is_created_without_overwriting_source(tmp_path):
+    source = tmp_path / "source.mp4"
+    source.touch()
+    project = tmp_path / "project.vidpp"
+    target = tmp_path / "archive/social/post.mp4"
+    data = {"source_path": str(source)}
+    assert render_target(project, data, preview=False, output_file=target) == target
+    assert target.parent.is_dir()
+    with pytest.raises(VidPPError, match="must not overwrite source"):
+        render_target(project, data, preview=False, output_file=source)
+
+
+def test_render_target_requires_mp4(tmp_path):
+    source = tmp_path / "source.mp4"
+    source.touch()
+    with pytest.raises(VidPPError, match=".mp4 extension"):
+        render_target(tmp_path / "project.vidpp", {"source_path": str(source)}, preview=False, output_file=tmp_path / "video.mov")
 
 
 def test_caption_timestamps_follow_cut_timeline():

@@ -1,6 +1,8 @@
+from pathlib import Path
+
 import pytest
 
-from vidpp.config import transcription_config
+from vidpp.config import app_config, transcription_config
 from vidpp.errors import VidPPError
 
 
@@ -45,6 +47,35 @@ def test_english_is_default(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "missing"))
     monkeypatch.delenv("VIDPP_WHISPER_LANGUAGE", raising=False)
     assert transcription_config(tmp_path).language == "en"
+
+
+def test_app_paths_have_safe_defaults(tmp_path, monkeypatch):
+    monkeypatch.delenv("VIDPP_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "missing"))
+    config = app_config()
+    assert config.projects_dir == Path.home() / ".local/vidpp/projects"
+    assert config.output_file_dir is None
+
+
+def test_app_paths_can_be_configured_relative_to_config(tmp_path, monkeypatch):
+    config_dir = tmp_path / "settings"
+    config_dir.mkdir()
+    path = config_dir / "config.yaml"
+    path.write_text("version: 1\nprojects_dir: projects\noutput_file_dir: exports\n")
+    monkeypatch.setenv("VIDPP_CONFIG", str(path))
+    config = app_config()
+    assert config.projects_dir == (config_dir / "projects").resolve()
+    assert config.output_file_dir == (config_dir / "exports").resolve()
+
+
+def test_project_config_cannot_redirect_application_paths(tmp_path, monkeypatch):
+    monkeypatch.delenv("VIDPP_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "missing"))
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "config.yaml").write_text("projects_dir: elsewhere\n")
+    with pytest.raises(VidPPError, match="invalid configuration keys"):
+        transcription_config(project)
 
 
 @pytest.mark.parametrize("value", ['"VidPP"', '[42]', '[""]', 'null'])
