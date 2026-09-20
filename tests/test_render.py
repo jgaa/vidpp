@@ -1,5 +1,5 @@
 from vidpp.models import EditOperation, TranscriptSegment
-from vidpp.render import build_filter, remap_transcript, timeline_ranges
+from vidpp.render import build_filter, log_edit_summary, remap_transcript, timeline_ranges
 from vidpp.template import Template
 
 
@@ -15,3 +15,19 @@ def test_caption_timestamps_follow_cut_timeline():
     transcript = [TranscriptSegment(0, 1, "before"), TranscriptSegment(3, 4, "after")]
     mapped = remap_transcript(transcript, [(0, 1), (3, 5)])
     assert [(item.start, item.end) for item in mapped] == [(0, 1), (1, 2)]
+
+
+def test_disabled_proposals_warn_that_full_timeline_is_rendered(caplog):
+    operations = [EditOperation("editor-001", "remove", 2, 5, enabled=False)]
+    ranges = timeline_ranges(operations, 7)
+    log_edit_summary(operations, 7, ranges)
+    assert ranges == [(0.0, 7)]
+    assert "none are enabled; rendering the full source timeline" in caplog.text
+
+
+def test_enabled_edit_logs_removed_duration(caplog):
+    caplog.set_level("INFO")
+    operations = [EditOperation("editor-001", "remove", 2, 5, enabled=True)]
+    ranges = timeline_ranges(operations, 7)
+    log_edit_summary(operations, 7, ranges)
+    assert "Applying 1 enabled edits; output timeline is shortened by 3.000 seconds" in caplog.text

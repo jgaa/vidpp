@@ -64,6 +64,21 @@ def timeline_ranges(operations: list[EditOperation], duration: float) -> list[tu
     return [(start, end) for start, end in ranges if end - start > .01]
 
 
+def log_edit_summary(operations: list[EditOperation], duration: float, ranges: list[tuple[float, float]]) -> None:
+    enabled = [item for item in operations if item.enabled and item.type != "review"]
+    removed = max(0.0, duration - sum(end - start for start, end in ranges))
+    if operations and not enabled:
+        LOG.warning(
+            "%d proposed edits exist but none are enabled; rendering the full source timeline. "
+            "Review edit.json and enable only justified cuts.",
+            len(operations),
+        )
+    elif enabled:
+        LOG.info("Applying %d enabled edits; output timeline is shortened by %.3f seconds.", len(enabled), removed)
+    else:
+        LOG.info("No edit operations exist; rendering the full source timeline.")
+
+
 def _filter_path(path: Path) -> str:
     # This is generated from a private cache filename, not model/template input.
     return str(path).replace("\\", r"\\").replace(":", r"\:").replace("'", r"\'")
@@ -107,6 +122,7 @@ def render(project: Path, template: Template, *, preview: bool = False) -> Path:
     ass_path = project / "cache" / "captions.ass"
     target = project / ("previews/preview.mp4" if preview else "output/final.mp4")
     ranges = timeline_ranges(operations, float(data["source"]["duration"]))
+    log_edit_summary(operations, float(data["source"]["duration"]), ranges)
     write_ass(ass_path, remap_transcript(transcript, ranges), template)
     filter_graph = build_filter(float(data["source"]["duration"]), operations, template, ass_path)
     command = ["ffmpeg", "-y", "-i", data["source_path"], "-filter_complex", filter_graph, "-map", "[outv]", "-map", "[outa]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"]

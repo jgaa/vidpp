@@ -69,7 +69,8 @@ def main(argv: list[str] | None = None) -> int:
             operations = plan(project, template)
             LOG.info("Rendering final video...")
             target = render(project, template)
-            print(f"{len(operations)} proposed edits. Done: {target}"); return 0
+            enabled = sum(item.enabled and item.type != "review" for item in operations)
+            print(f"{len(operations)} proposed edits, {enabled} enabled. Done: {target}"); return 0
         if args.command == "transcribe":
             if args.transcript:
                 LOG.info("Importing supplied transcript...")
@@ -85,7 +86,9 @@ def main(argv: list[str] | None = None) -> int:
             LOG.info("Planning edits...")
             metadata = refresh_source_metadata(args.project)
             template = load_template(args.template, args.hook, source_width=metadata["width"], source_height=metadata["height"])
-            print(f"{len(plan(args.project, template))} proposed edits.")
+            operations = plan(args.project, template)
+            enabled = sum(item.enabled and item.type != "review" for item in operations)
+            print(f"{len(operations)} proposed edits, {enabled} enabled; review {args.project / 'edit.json'}.")
         else:
             LOG.info("Rendering %s...", "preview" if args.command == "preview" else "final video")
             metadata = refresh_source_metadata(args.project)
