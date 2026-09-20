@@ -97,6 +97,48 @@ def test_editorial_request_includes_word_timestamp_pauses(tmp_path, monkeypatch)
     assert "Inspect the entire timeline before answering" in system_prompt
     assert "Do not stop after finding the first edit" in system_prompt
     assert '"start_block":1' not in system_prompt
+    assert captured["body"]["max_tokens"] == 4096
+    assert "chat_template_kwargs" not in captured["body"]
+    assert captured["body"]["reasoning_effort"] == "low"
+    schema = captured["body"]["response_format"]
+    assert schema["type"] == "json_object"
+    assert schema["schema"]["properties"]["operations"]["items"]["additionalProperties"] is False
+
+
+def test_editorial_output_limit_has_specific_error(tmp_path, monkeypatch):
+    import pytest
+    from vidpp.errors import VidPPError
+
+    source = tmp_path / "source.mp4"
+    source.touch()
+    (tmp_path / "project.json").write_text(json.dumps({"version": 1, "source_path": str(source), "source": {"duration": 2}}))
+    (tmp_path / "transcript.json").write_text(json.dumps({"segments": [
+        {"start": 0, "end": 2, "text": "So I...", "words": [
+            {"word": "So", "start": 0, "end": .2}, {"word": "I...", "start": .4, "end": 2}]},
+    ]}))
+    monkeypatch.setenv("VIDPP_LLM_BASE_URL", "http://localhost:8080/v1")
+    monkeypatch.setenv("VIDPP_LLM_MODEL", "test")
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self):
+            return json.dumps({"choices": [{"finish_reason": "length", "message": {"content": "{\"operations\":["}}]}).encode()
+
+    monkeypatch.setattr(core.urllib.request, "urlopen", lambda *args, **kwargs: Response())
+    with pytest.raises(VidPPError, match="output-token limit"):
+        core._llm_operations(tmp_path, {})
+
+
+def test_llm_max_tokens_validation(monkeypatch):
+    import pytest
+    from vidpp.errors import VidPPError
+
+    monkeypatch.setenv("VIDPP_LLM_MAX_TOKENS", "8192")
+    assert core._llm_max_tokens() == 8192
+    monkeypatch.setenv("VIDPP_LLM_MAX_TOKENS", "lots")
+    with pytest.raises(VidPPError, match="must be an integer"):
+        core._llm_max_tokens()
 
 
 def test_editorial_cut_must_use_known_block_ids(tmp_path, monkeypatch):

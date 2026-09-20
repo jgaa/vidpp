@@ -449,6 +449,17 @@ def _llm_timeout() -> float:
     return timeout
 
 
+def _llm_max_tokens() -> int:
+    value = os.environ.get("VIDPP_LLM_MAX_TOKENS", "4096")
+    try:
+        max_tokens = int(value)
+    except ValueError as exc:
+        raise VidPPError("VIDPP_LLM_MAX_TOKENS must be an integer") from exc
+    if not 128 <= max_tokens <= 32768:
+        raise VidPPError("VIDPP_LLM_MAX_TOKENS must be between 128 and 32768")
+    return max_tokens
+
+
 def _llm_operations(project: Path, _analysis_data: dict[str, Any]) -> list[EditOperation]:
     base_url, model = os.environ.get("VIDPP_LLM_BASE_URL"), os.environ.get("VIDPP_LLM_MODEL")
     if not base_url or not model: return []
@@ -458,7 +469,7 @@ def _llm_operations(project: Path, _analysis_data: dict[str, Any]) -> list[EditO
               "removal; the operations array may contain zero, one, or multiple items. Do not stop after finding the first edit. "
               "Return JSON only. The top-level object must contain exactly an operations array. Each operation must contain "
               "exactly id (a unique string), type (the string remove), start_block (an integer speech-block number), "
-              "end_block (an integer speech-block number), and reason (a string grounded in the quoted transcript text). "
+              "end_block (an integer speech-block number), and reason (at most 30 words grounded in the quoted transcript text). "
               "Only propose obvious abandoned false starts or superseded repetitions. When several short attempts "
               "are followed by a completed restart, evaluate the whole run and remove every clearly superseded attempt, "
               "not just the first one; represent a consecutive run as one operation from its first failed speech block "
@@ -516,7 +527,40 @@ def _llm_operations(project: Path, _analysis_data: dict[str, Any]) -> list[EditO
         else:
             identified_blocks.append([index, "pause", round(value[1] - value[0], 3)])
     payload = {"timeline_blocks": identified_blocks}
-    body = {"model": model, "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}], "temperature": 0}
+    response_schema = {
+        "type": "object",
+        "properties": {
+            "operations": {
+                "type": "array",
+                "maxItems": 12,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "minLength": 1, "maxLength": 64},
+                        "type": {"type": "string", "const": "remove"},
+                        "start_block": {"type": "integer", "minimum": 1},
+                        "end_block": {"type": "integer", "minimum": 1},
+                        "reason": {"type": "string", "minLength": 1, "maxLength": 180},
+                    },
+                    "required": ["id", "type", "start_block", "end_block", "reason"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["operations"],
+        "additionalProperties": False,
+    }
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))},
+        ],
+        "temperature": 0,
+        "max_tokens": _llm_max_tokens(),
+        "response_format": {"type": "json_object", "schema": response_schema},
+        "reasoning_effort": "low",
+    }
     request = urllib.request.Request(base_url.rstrip("/") + "/chat/completions", data=json.dumps(body).encode(), headers={"Content-Type": "application/json", **({"Authorization": "Bearer " + os.environ["VIDPP_LLM_API_KEY"]} if os.environ.get("VIDPP_LLM_API_KEY") else {})})
     timeout = _llm_timeout()
     context_count = len(identified_blocks) - len(blocks)
@@ -529,11 +573,21 @@ def _llm_operations(project: Path, _analysis_data: dict[str, Any]) -> list[EditO
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response: answer = json.loads(response.read())
         write_json(cache / "editorial-response.json", answer)
-        content = answer["choices"][0]["message"]["content"]
-        raw = json.loads(content)
     except (TimeoutError, socket.timeout) as exc:
         raise VidPPError(f"local LLM timed out after {timeout:.0f}s; increase VIDPP_LLM_TIMEOUT or use a smaller/faster model") from exc
     except Exception as exc: raise VidPPError(f"local LLM response was unusable: {exc}") from exc
+    try:
+        choice = answer["choices"][0]
+        if choice.get("finish_reason") == "length":
+            raise VidPPError("local LLM reached its output-token limit before completing the edit plan")
+        content = choice["message"]["content"]
+        raw = json.loads(content)
+    except VidPPError:
+        raise
+    except json.JSONDecodeError as exc:
+        raise VidPPError(f"local LLM returned incomplete or invalid JSON: {exc}") from exc
+    except (KeyError, IndexError, TypeError) as exc:
+        raise VidPPError(f"local LLM response was unusable: {exc}") from exc
     duration = project_data(project)["source"]["duration"]
     if not isinstance(raw, dict) or set(raw) != {"operations"} or not isinstance(raw["operations"], list):
         raise VidPPError("LLM must return an object containing only an operations array")

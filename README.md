@@ -178,6 +178,8 @@ export VIDPP_LLM_BASE_URL=http://model-machine:8000/v1
 export VIDPP_LLM_MODEL=Qwen3-4B-Instruct
 # Optional; local thinking models may need several minutes. Default: 600 seconds.
 export VIDPP_LLM_TIMEOUT=600
+# Optional generation budget. Default: 4096; thinking-only models may need more.
+export VIDPP_LLM_MAX_TOKENS=4096
 ```
 
 ### llama.cpp server on an AMD Vulkan system
@@ -205,7 +207,7 @@ This is a full Git history checkout and builds the complete project, including t
   --alias vidpp-editor \
   --host 127.0.0.1 --port 8080 \
   --n-gpu-layers all \
-  --ctx-size 16384 --n-predict 1024
+  --ctx-size 16384 --n-predict 4096
 ```
 
 `--n-gpu-layers all` asks llama.cpp to place all layers that fit in VRAM; reduce it to a number if the model does not fit. Confirm the startup log identifies `ggml_vulkan` and the AMD device. Point VidPP at the server alias:
@@ -214,6 +216,8 @@ This is a full Git history checkout and builds the complete project, including t
 export VIDPP_LLM_BASE_URL=http://127.0.0.1:8080/v1
 export VIDPP_LLM_MODEL=vidpp-editor
 ```
+
+VidPP requests schema-constrained JSON and supplies its own `max_tokens` value, controlled by `VIDPP_LLM_MAX_TOKENS`. Qwen3-4B-Instruct-2507 is normally the faster fit for this bounded editorial classification task. Qwen3-4B-Thinking-2507 is also supported, but it is a thinking-only model and may consume substantially more generation tokens before producing the JSON plan; do not try to disable thinking for that checkpoint. If it reaches the generation limit, increase `VIDPP_LLM_MAX_TOKENS` and the server's `--n-predict` value together.
 
 For a model server on another trusted machine, replace `127.0.0.1` in `--host` and `VIDPP_LLM_BASE_URL` with its private-network address, set `--api-key` on `llama-server`, and export the same value as `VIDPP_LLM_API_KEY` for VidPP. Do not expose the server directly to the public internet; use a firewall and reverse proxy if that is unavoidable.
 
