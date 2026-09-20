@@ -58,6 +58,44 @@ def test_editorial_request_is_compact_and_uses_configured_timeout(tmp_path, monk
     assert (tmp_path / "cache/editorial-response.json").is_file()
 
 
+def test_editorial_request_includes_word_timestamp_pauses(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.touch()
+    (tmp_path / "project.json").write_text(json.dumps({"version": 1, "source_path": str(source), "source": {"duration": 9}}))
+    (tmp_path / "transcript.json").write_text(json.dumps({"segments": [
+        {"start": 0, "end": 1, "text": "So I...", "words": [
+            {"word": "So", "start": 0, "end": .2}, {"word": "I...", "start": .4, "end": 1}]},
+        {"start": 3, "end": 4, "text": "So...", "words": [
+            {"word": "So...", "start": 3, "end": 4}]},
+        {"start": 7, "end": 9, "text": "So I finished.", "words": [
+            {"word": "So", "start": 7, "end": 7.2}, {"word": "I", "start": 7.3, "end": 7.5},
+            {"word": "finished.", "start": 7.6, "end": 9}]},
+    ]}))
+    monkeypatch.setenv("VIDPP_LLM_BASE_URL", "http://localhost:8080/v1")
+    monkeypatch.setenv("VIDPP_LLM_MODEL", "test")
+    captured = {}
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self): return b'{"choices":[{"message":{"content":"{\\"operations\\":[]}"}}]}'
+
+    def open_request(request, **kwargs):
+        captured["body"] = json.loads(request.data)
+        return Response()
+
+    monkeypatch.setattr(core.urllib.request, "urlopen", open_request)
+    core._llm_operations(tmp_path, {})
+
+    payload = json.loads(captured["body"]["messages"][1]["content"])
+    assert payload == {"timeline_blocks": [
+        [1, "speech", "So I..."], [2, "pause", 2.0], [3, "speech", "So..."],
+        [4, "pause", 3.0], [5, "speech", "So I finished."],
+    ]}
+    system_prompt = captured["body"]["messages"][0]["content"]
+    assert "remove every clearly superseded attempt" in system_prompt
+
+
 def test_editorial_cut_must_use_known_block_ids(tmp_path, monkeypatch):
     source = tmp_path / "source.mp4"
     source.touch()
