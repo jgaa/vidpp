@@ -16,8 +16,10 @@ def test_shorten_pause_generates_short_retained_range(tmp_path):
 def test_hook_overlay_is_duration_bounded_and_does_not_truncate_video(tmp_path):
     template = Template(hook_duration=3.5)
     graph = build_filter(7, [], template, tmp_path / "captions.ass", tmp_path / "hook.png")
-    assert "trim=duration=3.500" in graph
-    assert "eof_action=pass:repeatlast=0" in graph
+    assert "movie='" in graph
+    assert ":loop=1" not in graph
+    assert "eof_action=repeat:repeatlast=1" in graph
+    assert "enable='between(t,0,3.500)'" in graph
     assert "shortest=1:enable" not in graph
 
 

@@ -202,12 +202,12 @@ def build_filter(source_duration: float, operations: list[EditOperation], templa
     if hook_overlay:
         margin = max(24, round(template.height * 140 / 1920))
         y = str(margin) if template.hook_position == "top" else f"H-h-{margin}"
+        # PNG/SVG hooks provide one frame. Hold that frame in overlay's framesync
+        # until the enable interval ends; looping the movie source can outlive the
+        # main video, while repeatlast=0 makes the hook flash for only one frame.
+        parts.append(f"movie='{_filter_path(hook_overlay)}',setpts=PTS-STARTPTS[hookbg]")
         parts.append(
-            f"movie='{_filter_path(hook_overlay)}':loop=1,"
-            f"trim=duration={template.hook_duration:.3f},setpts=PTS-STARTPTS[hookbg]"
-        )
-        parts.append(
-            f"[composed][hookbg]overlay=(W-w)/2:{y}:eof_action=pass:repeatlast=0:"
+            f"[composed][hookbg]overlay=(W-w)/2:{y}:eof_action=repeat:repeatlast=1:"
             f"enable='between(t,0,{template.hook_duration:.3f})'[withhook]"
         )
         parts.append(f"[withhook]ass='{_filter_path(ass_path)}'[outv]")
