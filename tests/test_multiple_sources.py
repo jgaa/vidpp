@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from vidpp.cli import parser
+from vidpp.cli import _prepare_project_destination, parser
 from vidpp.core import create_project, project_data
 from vidpp.errors import VidPPError
 
@@ -21,6 +21,46 @@ def _video(path: Path, *, size: str = "160x90", frequency: int = 440) -> None:
 def test_cli_accepts_ordered_sources():
     args = parser().parse_args(["process", "first.mp4", "second.mp4", "--project", "combined.vidpp"])
     assert args.sources == [Path("first.mp4"), Path("second.mp4")]
+
+
+def test_cli_project_name_adds_suffix_and_accepts_replace():
+    args = parser().parse_args(["process", "source.mp4", "--project-name", "demo", "--replace-project"])
+    assert args.project_name == Path("demo.vidpp")
+    assert args.project is None
+    assert args.replace_project is True
+    imported = parser().parse_args(["import", "source.mp4", "demo.vidpp", "--replace-project"])
+    assert imported.project == Path("demo.vidpp")
+    assert imported.replace_project is True
+
+
+def test_cli_rejects_project_name_paths():
+    with pytest.raises(SystemExit):
+        parser().parse_args(["process", "source.mp4", "--project-name", "nested/demo"])
+
+
+def test_replace_project_removes_only_exact_destination(tmp_path):
+    source = tmp_path / "source.mp4"
+    source.touch()
+    project = tmp_path / "demo.vidpp"
+    project.mkdir()
+    (project / "old-file").write_text("old")
+
+    _prepare_project_destination(project, [source], True)
+
+    assert not project.exists()
+    assert source.is_file()
+
+
+def test_replace_project_refuses_to_delete_contained_source(tmp_path):
+    project = tmp_path / "demo.vidpp"
+    project.mkdir()
+    source = project / "source.mp4"
+    source.touch()
+
+    with pytest.raises(VidPPError, match="contains source media"):
+        _prepare_project_destination(project, [source], True)
+
+    assert source.is_file()
 
 
 def test_multiple_sources_create_rebuildable_master(tmp_path):

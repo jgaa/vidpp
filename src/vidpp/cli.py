@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 import sys
 import shutil
+import tempfile
 
 from .core import analyze, create_project, plan, refresh_source_metadata, save_transcript, transcribe
 from .errors import VidPPError
@@ -17,6 +18,35 @@ LOG = logging.getLogger(__name__)
 def _project(value: str) -> Path: return Path(value).resolve()
 
 
+def _project_name(value: str) -> Path:
+    if not value or value in {".", "..", ".vidpp"} or Path(value).name != value or "/" in value or "\\" in value:
+        raise argparse.ArgumentTypeError("project name must be one directory name without path separators")
+    return Path(value if value.endswith(".vidpp") else value + ".vidpp")
+
+
+def _prepare_project_destination(project: Path, sources: list[Path], replace: bool) -> None:
+    if not replace or (not project.exists() and not project.is_symlink()):
+        return
+    if project.is_symlink():
+        raise VidPPError(f"refusing to replace a symlinked project destination: {project}")
+    if not project.is_dir():
+        raise VidPPError(f"project destination is not a directory: {project}")
+    target = project.resolve()
+    protected = {Path("/").resolve(), Path.cwd().resolve(), Path.home().resolve(), Path(tempfile.gettempdir()).resolve()}
+    if target in protected or target in Path.cwd().resolve().parents:
+        raise VidPPError(f"refusing to replace protected directory: {target}")
+    for source in sources:
+        absolute_source = source.absolute()
+        resolved_source = source.resolve()
+        if (absolute_source == target or target in absolute_source.parents or
+                resolved_source == target or target in resolved_source.parents):
+            raise VidPPError(f"refusing to replace project because it contains source media: {source}")
+    if target.suffix != ".vidpp" and not (target / "project.json").is_file():
+        raise VidPPError(f"refusing to replace directory that is not recognizably a VidPP project: {target}")
+    LOG.warning("Replacing project: removing existing destination %s", target)
+    shutil.rmtree(target)
+
+
 def parser() -> argparse.ArgumentParser:
     app = argparse.ArgumentParser(prog="vidpp", description="Local, deterministic social-video post-processing")
     app.add_argument("-v", "--verbose", action="count", default=0)
@@ -24,6 +54,7 @@ def parser() -> argparse.ArgumentParser:
     import_cmd = commands.add_parser("import", help="create a project without copying source media")
     import_cmd.add_argument("sources", type=Path, nargs="+"); import_cmd.add_argument("project", type=Path)
     import_cmd.add_argument("--project-config", type=Path)
+    import_cmd.add_argument("--replace-project", action="store_true", help="remove and recreate the destination project")
     for name in ("transcribe", "analyze", "plan", "render", "preview"):
         cmd = commands.add_parser(name); cmd.add_argument("project", type=_project); cmd.add_argument("--template", type=Path); cmd.add_argument("--hook")
         if name == "transcribe": cmd.add_argument("--transcript", type=Path)
@@ -31,7 +62,12 @@ def parser() -> argparse.ArgumentParser:
             cmd.add_argument("--format", dest="output_format", metavar="p720")
             cmd.add_argument("--orientation", choices=("auto", "portrait", "landscape"))
     process = commands.add_parser("process", help="run the complete pipeline")
-    process.add_argument("sources", type=Path, nargs="+"); process.add_argument("--project", type=Path); process.add_argument("--template", type=Path); process.add_argument("--hook"); process.add_argument("--transcript", type=Path)
+    process.add_argument("sources", type=Path, nargs="+")
+    destination = process.add_mutually_exclusive_group()
+    destination.add_argument("--project", type=Path, help="project destination path")
+    destination.add_argument("--project-name", type=_project_name, help="project directory name; .vidpp is appended")
+    process.add_argument("--replace-project", action="store_true", help="remove and recreate the destination project")
+    process.add_argument("--template", type=Path); process.add_argument("--hook"); process.add_argument("--transcript", type=Path)
     process.add_argument("--project-config", type=Path)
     process.add_argument("--format", dest="output_format", metavar="p720")
     process.add_argument("--orientation", choices=("auto", "portrait", "landscape"))
@@ -46,13 +82,15 @@ def main(argv: list[str] | None = None) -> int:
             raise VidPPError(f"project configuration does not exist: {args.project_config}")
         if args.command == "import":
             LOG.info("Inspecting source and creating project...")
+            _prepare_project_destination(args.project, args.sources, args.replace_project)
             create_project(args.sources, args.project)
             if args.project_config: shutil.copyfile(args.project_config, args.project / "config.yaml")
             print(f"Created project: {args.project}")
             return 0
         if args.command == "process":
-            project = args.project or Path(args.sources[0].stem + ".vidpp")
+            project = args.project or args.project_name or Path(args.sources[0].stem + ".vidpp")
             LOG.info("Inspecting source and creating project...")
+            _prepare_project_destination(project, args.sources, args.replace_project)
             metadata = create_project(args.sources, project)
             source = metadata["source"]
             template = load_template(args.template, args.hook, source_width=source["width"], source_height=source["height"], output_format=args.output_format, orientation=args.orientation)

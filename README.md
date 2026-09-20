@@ -47,6 +47,15 @@ vidpp render combined.vidpp
 
 Multiple inputs are normalized and concatenated into `cache/master.mp4`. Transcription, analysis, semantic edits, captions, and rendering use that continuous master timeline. The original videos are only read. `project.json` retains every original absolute path, its inspected metadata, and its start/end on the master timeline. If the cached master is deleted, VidPP rebuilds it from the originals.
 
+Use `--project-name` when only a local project name is needed; VidPP appends `.vidpp`. Use `--project` for an explicit destination path. `--replace-project` removes an existing destination before recreating it:
+
+```bash
+vidpp process source.mp4 --project-name fresh-take --replace-project
+vidpp import first.mp4 second.mp4 combined.vidpp --replace-project
+```
+
+Replacement is destructive for the destination project directory. VidPP refuses symlinks, protected or broad directories, unrecognized non-`.vidpp` directories, and any destination containing one of the source files. Source media is never removed.
+
 For now, inputs must have matching displayed dimensions and frame rates and must contain audio. VidPP validates dimensions and frame rate before combining them; FFmpeg reports other incompatible stream details. A single source continues to be referenced directly without creating a master. Without `--project`, a multi-source project is named after the first input.
 
 ### Output size and orientation
