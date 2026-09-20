@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 import shutil
 
-from .core import analyze, create_project, plan, project_data, save_transcript, transcribe
+from .core import analyze, create_project, plan, refresh_source_metadata, save_transcript, transcribe
 from .errors import VidPPError
 from .render import render
 from .template import load_template
@@ -78,17 +78,17 @@ def main(argv: list[str] | None = None) -> int:
                 transcribe(args.project)
         elif args.command == "analyze":
             LOG.info("Analyzing audio...")
-            metadata = project_data(args.project)["source"]
+            metadata = refresh_source_metadata(args.project)
             template = load_template(args.template, args.hook, source_width=metadata["width"], source_height=metadata["height"])
             analyze(args.project, template)
         elif args.command == "plan":
             LOG.info("Planning edits...")
-            metadata = project_data(args.project)["source"]
+            metadata = refresh_source_metadata(args.project)
             template = load_template(args.template, args.hook, source_width=metadata["width"], source_height=metadata["height"])
             print(f"{len(plan(args.project, template))} proposed edits.")
         else:
             LOG.info("Rendering %s...", "preview" if args.command == "preview" else "final video")
-            metadata = project_data(args.project)["source"]
+            metadata = refresh_source_metadata(args.project)
             template = load_template(args.template, args.hook, source_width=metadata["width"], source_height=metadata["height"], output_format=args.output_format, orientation=args.orientation)
             LOG.info("Output format: %dx%d", template.width, template.height)
             print(f"Done: {render(args.project, template, preview=args.command == 'preview')}")

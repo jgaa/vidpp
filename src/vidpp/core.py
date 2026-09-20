@@ -33,15 +33,32 @@ def run(command: list[str], *, capture: bool = True) -> subprocess.CompletedProc
 
 def inspect(source: Path) -> dict[str, Any]:
     if not source.is_file(): raise VidPPError(f"source video does not exist: {source}")
-    result = run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height,avg_frame_rate", "-of", "json", str(source)])
+    result = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "format=duration:stream=codec_type,width,height,avg_frame_rate:stream_tags=rotate:stream_side_data", "-of", "json", str(source)])
     try:
         payload = json.loads(result.stdout)
         duration = float(payload["format"]["duration"])
         video = next(item for item in payload["streams"] if item["codec_type"] == "video")
     except (KeyError, StopIteration, ValueError, TypeError, json.JSONDecodeError) as exc:
         raise VidPPError("could not obtain a valid video stream and duration from source") from exc
+    coded_width, coded_height = int(video["width"]), int(video["height"])
+    rotation_value: Any = video.get("tags", {}).get("rotate", 0)
+    for side_data in video.get("side_data_list", []):
+        if "rotation" in side_data:
+            rotation_value = side_data["rotation"]
+            break
+    try:
+        rotation = float(rotation_value)
+    except (TypeError, ValueError) as exc:
+        raise VidPPError(f"invalid source rotation metadata: {rotation_value!r}") from exc
+    quarter_turns = round(rotation / 90)
+    if abs(rotation - quarter_turns * 90) > 1:
+        LOG.warning("Source rotation %.2f° is not a quarter turn; orientation uses coded dimensions", rotation)
+        quarter_turns = 0
+    width, height = (coded_height, coded_width) if quarter_turns % 2 else (coded_width, coded_height)
     fps = video.get("avg_frame_rate", "0/1")
-    return {"duration": duration, "width": video["width"], "height": video["height"], "fps": fps}
+    metadata = {"duration": duration, "width": width, "height": height, "coded_width": coded_width, "coded_height": coded_height, "rotation": rotation, "fps": fps}
+    LOG.debug("Source display metadata: %s", metadata)
+    return metadata
 
 
 def create_project(source: Path, project: Path) -> dict[str, Any]:
@@ -61,6 +78,17 @@ def project_data(project: Path) -> dict[str, Any]:
     if not isinstance(raw, dict) or raw.get("version") != 1 or not isinstance(raw.get("source_path"), str): raise VidPPError("invalid project.json")
     if not Path(raw["source_path"]).is_file(): raise VidPPError("project source video no longer exists")
     return raw
+
+
+def refresh_source_metadata(project: Path) -> dict[str, Any]:
+    """Re-probe a project's source, including display rotation, and persist it."""
+    data = project_data(project)
+    metadata = inspect(Path(data["source_path"]))
+    if data.get("source") != metadata:
+        data["source"] = metadata
+        write_json(project / "project.json", data)
+        LOG.info("Updated project source metadata: display %dx%d, rotation %.0f°", metadata["width"], metadata["height"], metadata["rotation"])
+    return metadata
 
 
 def save_transcript(project: Path, transcript: Path) -> None:
