@@ -17,8 +17,7 @@ def test_contradictory_editorial_cut_requires_explicit_acceptance(tmp_path, monk
         def __exit__(self, *args): pass
         def read(self):
             return json.dumps({"choices": [{"message": {"content": json.dumps({"operations": [
-                {"id": "editor-001", "type": "remove", "start_block": 1, "end_block": 1,
-                 "reason": "Removing this question would weaken the message."}]})}}]}).encode()
+                {"start": 1, "end": 1, "reason": "Removing this question would weaken the message."}]})}}]}).encode()
     monkeypatch.setattr(core.urllib.request, "urlopen", lambda *args, **kwargs: Response())
     operations = core._llm_operations(tmp_path, {})
     assert len(operations) == 1
@@ -50,8 +49,8 @@ def test_editorial_request_is_compact_and_uses_configured_timeout(tmp_path, monk
         {"start": 1.2, "end": 2.5, "duration": 1.3},
     ]}) == []
     user_payload = json.loads(captured["body"]["messages"][1]["content"])
-    assert user_payload == {"timeline_blocks": [
-        [1, "speech", "Hello there."], [2, "silence", 1.3], [3, "speech", "Again."],
+    assert user_payload == {"owned_blocks": [1, 2], "blocks": [
+        [1, "Hello there.", 2.0], [2, "Again."],
     ]}
     assert captured["timeout"] == 345
     assert (tmp_path / "cache/editorial-request.json").is_file()
@@ -88,21 +87,20 @@ def test_editorial_request_includes_word_timestamp_pauses(tmp_path, monkeypatch)
     core._llm_operations(tmp_path, {})
 
     payload = json.loads(captured["body"]["messages"][1]["content"])
-    assert payload == {"timeline_blocks": [
-        [1, "speech", "So I..."], [2, "pause", 2.0], [3, "speech", "So..."],
-        [4, "pause", 3.0], [5, "speech", "So I finished."],
+    assert payload == {"owned_blocks": [1, 3], "blocks": [
+        [1, "So I...", 2.0], [2, "So...", 3.0], [3, "So I finished."],
     ]}
     system_prompt = captured["body"]["messages"][0]["content"]
-    assert "remove every clearly superseded attempt" in system_prompt
-    assert "Inspect the entire timeline before answering" in system_prompt
-    assert "Do not stop after finding the first edit" in system_prompt
-    assert '"start_block":1' not in system_prompt
+    assert "local window, not the whole video" in system_prompt
+    assert "gap_after_seconds" in system_prompt
     assert captured["body"]["max_tokens"] == 8192
     assert "chat_template_kwargs" not in captured["body"]
     assert captured["body"]["reasoning_effort"] == "low"
     schema = captured["body"]["response_format"]
     assert schema["type"] == "json_object"
-    assert schema["schema"]["properties"]["operations"]["items"]["additionalProperties"] is False
+    operation_schema = schema["schema"]["properties"]["operations"]["items"]
+    assert operation_schema["additionalProperties"] is False
+    assert set(operation_schema["properties"]) == {"start", "end", "reason"}
 
 
 def test_editorial_output_limit_has_specific_error(tmp_path, monkeypatch):
@@ -153,13 +151,13 @@ def test_editorial_cut_must_use_known_block_ids(tmp_path, monkeypatch):
         def __enter__(self): return self
         def __exit__(self, *args): pass
         def read(self):
-            content = json.dumps({"operations": [{"id": "bad", "type": "remove", "start_block": 999, "end_block": 1, "reason": "invented boundary"}]})
+            content = json.dumps({"operations": [{"start": 999, "end": 1, "reason": "invented boundary"}]})
             return json.dumps({"choices": [{"message": {"content": content}}]}).encode()
     monkeypatch.setattr(core.urllib.request, "urlopen", lambda *args, **kwargs: Response())
 
     import pytest
     from vidpp.errors import VidPPError
-    with pytest.raises(VidPPError, match="known speech blocks"):
+    with pytest.raises(VidPPError, match="supplied speech blocks"):
         core._llm_operations(tmp_path, {})
 
 
@@ -183,7 +181,54 @@ def test_editorial_silence_overlapping_speech_is_not_sent(tmp_path, monkeypatch)
 
     core._llm_operations(tmp_path, {"silences": [{"start": .5, "end": 1.5, "duration": 1}]})
     payload = json.loads(captured["body"]["messages"][1]["content"])
-    assert payload == {"timeline_blocks": [[1, "speech", "Quiet speech."]]}
+    assert payload == {"owned_blocks": [1, 1], "blocks": [[1, "Quiet speech."]]}
+
+
+def test_editorial_windows_have_exclusive_owners_and_overlapping_context():
+    assert core._editorial_windows(51) == [
+        {"stage": "opening", "window_start": 1, "window_end": 12, "owner_start": 1, "owner_end": 8},
+        {"stage": "middle-001", "window_start": 5, "window_end": 24, "owner_start": 9, "owner_end": 20},
+        {"stage": "middle-002", "window_start": 17, "window_end": 36, "owner_start": 21, "owner_end": 32},
+        {"stage": "middle-003", "window_start": 29, "window_end": 47, "owner_start": 33, "owner_end": 43},
+        {"stage": "ending", "window_start": 40, "window_end": 51, "owner_start": 44, "owner_end": 51},
+    ]
+
+
+def test_editorial_context_proposals_are_ignored_and_each_window_is_cached(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.touch()
+    (tmp_path / "project.json").write_text(json.dumps({
+        "version": 1, "source_path": str(source), "source": {"duration": 40},
+    }))
+    segments = [{
+        "start": index * 2, "end": index * 2 + 1, "text": f"Block {index + 1}.",
+        "words": [{"word": f"Block-{index + 1}.", "start": index * 2, "end": index * 2 + 1}],
+    } for index in range(20)]
+    (tmp_path / "transcript.json").write_text(json.dumps({"segments": segments}))
+    monkeypatch.setenv("VIDPP_LLM_BASE_URL", "http://localhost:8080/v1")
+    monkeypatch.setenv("VIDPP_LLM_MODEL", "test")
+
+    class Response:
+        def __init__(self, content): self.content = content
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self): return json.dumps({"choices": [{"message": {"content": self.content}}]}).encode()
+
+    def open_request(request, **kwargs):
+        body = json.loads(request.data)
+        payload = json.loads(body["messages"][1]["content"])
+        first_context_id = payload["blocks"][0][0]
+        content = json.dumps({"operations": [{
+            "start": first_context_id, "end": first_context_id, "reason": "test candidate",
+        }]})
+        return Response(content)
+
+    monkeypatch.setattr(core.urllib.request, "urlopen", open_request)
+    operations = core._llm_operations(tmp_path, {})
+
+    assert [(item.source_start, item.source_end) for item in operations] == [(0, 1)]
+    assert len(list((tmp_path / "cache").glob("editorial-request-[0-9][0-9][0-9].json"))) == 3
+    assert len(list((tmp_path / "cache").glob("editorial-response-[0-9][0-9][0-9].json"))) == 3
 
 
 def test_silence_detector_cannot_remove_transcribed_speech(tmp_path, monkeypatch):

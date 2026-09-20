@@ -371,7 +371,17 @@ It must NOT:
 * generate FFmpeg filter graphs;
 * directly modify source media.
 
-It receives structured transcript/analysis data and produces a semantic edit plan.
+It receives compact, numbered transcript windows with gap durations and produces semantic edit candidates. Exact source timestamps are not sent to or accepted from the model.
+
+For a normal-length recording, use explicit stages:
+
+1. inspect the opening for abandoned starts;
+2. slide bounded windows through the middle to find repeated takes, restarts, and clearly superseded fragments;
+3. inspect the ending for an abandoned tail or repeated conclusion.
+
+Each window has an exclusive ownership range plus overlapping read-only context. Accept only candidates whose first speech block belongs to that window's ownership range. This provides complete coverage without letting overlapping windows own the same decision. Keep the format compact, for example `[speech_id, text, gap_after_seconds]`, and retain every numbered request and response for debugging.
+
+The model returns inclusive speech-block IDs and a short reason. Deterministic code assigns operation IDs, maps the private block IDs to timestamps, deduplicates exact candidates, and validates the result before writing the persistent edit plan.
 
 For example:
 
@@ -379,17 +389,9 @@ For example:
 {
   "operations": [
     {
-      "type": "remove",
-      "start": 12.3,
-      "end": 16.8,
+      "start": 4,
+      "end": 6,
       "reason": "speaker abandons sentence and restarts it"
-    },
-    {
-      "type": "shorten_pause",
-      "start": 27.2,
-      "end": 29.9,
-      "target_duration": 0.4,
-      "reason": "unintended long pause"
     }
   ]
 }
