@@ -79,6 +79,7 @@ def transcribe(project: Path) -> None:
     if command_text:
         command = shlex.split(command_text)
         if not command: raise VidPPError("VIDPP_TRANSCRIBE_COMMAND is empty")
+        LOG.info("Transcribing with configured local command...")
         result = run([*command, source])
         target.write_text(result.stdout, encoding="utf-8")
     else:
@@ -92,11 +93,12 @@ def transcribe(project: Path) -> None:
         cache = project / "cache"
         command = ["whisper", source, "--model", settings.model, "--output_dir", str(cache), "--output_format", "json", "--fp16", "False", "--word_timestamps", "True"]
         language = settings.language
-        if language: command.extend(["--language", language])
+        if language.casefold() != "auto": command.extend(["--language", language])
         if settings.phrases:
             command.extend(["--initial_prompt", ", ".join(settings.phrases)])
         LOG.debug("Whisper configuration: %s", asdict(settings))
         write_json(cache / "transcription-settings.json", asdict(settings))
+        LOG.info("Loading Whisper model %s and transcribing with word timestamps...", settings.model)
         run(command, capture=False)
         whisper_json = cache / (Path(source).stem + ".json")
         if not whisper_json.is_file():

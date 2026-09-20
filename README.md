@@ -35,7 +35,7 @@ For local use, VidPP transcribes with the local `whisper` executable when no `--
 python -m pip install openai-whisper
 ```
 
-FFmpeg is also required. The default Whisper model is now `turbo`, with word timestamps enabled. It offers a stronger transcription starting point than the previous `base` default, but does not guarantee recognition of every word. Set `VIDPP_WHISPER_MODEL=large-v3` to try the full model, or `small` for lower resource use. Set `VIDPP_WHISPER_LANGUAGE=en` to select English explicitly. Model weights may be downloaded on first use; speech processing stays local. The Python Whisper runtime uses PyTorch; llama.cpp's Vulkan acceleration does not enable Vulkan for Python Whisper. See the [Whisper model comparison](https://github.com/openai/whisper#available-models-and-languages).
+FFmpeg is also required. The default Whisper model is `turbo`, with word timestamps enabled. It offers a stronger transcription starting point than the previous `base` default, but does not guarantee recognition of every word. English is the default language and is passed explicitly, avoiding a separate language-detection step. Set `VIDPP_WHISPER_LANGUAGE=auto` to detect it, or use another language code. Set `VIDPP_WHISPER_MODEL=large-v3` to try the full model, or `small` for lower resource use. Model weights may be downloaded on first use; speech processing stays local. The Python Whisper runtime uses PyTorch; llama.cpp's Vulkan acceleration does not enable Vulkan for Python Whisper. See the [Whisper model comparison](https://github.com/openai/whisper#available-models-and-languages).
 
 If Whisper is unavailable, VidPP prints install instructions and exits without rendering. Alternatives are a timestamped `--transcript`, or `VIDPP_TRANSCRIBE_COMMAND` pointing to a local executable that accepts the source-video path as its final argument and writes compatible transcript JSON to stdout. That adapter controls its own model/prompt settings. VidPP invokes it as an argument array, never through a shell.
 
@@ -69,7 +69,20 @@ The supplied configuration is copied to `project/config.yaml`. For an existing p
 
 ### Captions and reviewing edits
 
-Captions use actual word boundaries and font-measured line breaks, with up to the configured `subtitles.max_lines`. Font lookup requires `fontconfig` (`sudo apt-get install fontconfig` on Debian/Ubuntu). The default font size is 44 pixels at 1080-pixel output width and scales with the output width; an explicit `subtitles.font_size` is always in output pixels. Sentence grouping and short caption grouping are separate operations. Install updated dependencies in your active venv with `python -m pip install -e .`.
+Captions use actual word boundaries and font-measured line breaks. Sentence endings, commas, semicolons and colons are preferred boundaries. Long phrases split by word count, duration, available lines, or a pause. A caption may linger for reading, but only for a bounded time and never across the next spoken phrase; the remainder of a long pause has no caption. These controls belong in the visual template:
+
+```yaml
+subtitles:
+  max_lines: 2
+  max_words: 12
+  max_duration: 3.5
+  pause_threshold: 0.45
+  linger: 1.0
+```
+
+Durations are seconds. Font lookup requires `fontconfig` (`sudo apt-get install fontconfig` on Debian/Ubuntu). The default font size is 44 pixels at 1080-pixel output width and scales with the output width; an explicit `subtitles.font_size` is always in output pixels. Sentence grouping and short caption grouping are separate operations. Install updated dependencies in your active venv with `python -m pip install -e .`.
+
+Normal CLI output announces source inspection, model loading/transcription, audio analysis, edit planning, and rendering before each stage starts. Use `-v` for transcript decisions and executed commands.
 
 Legacy transcripts without words use estimated caption timing with a warning. Edits crossing such a segment, or cutting through a timestamped word, stop rendering with an actionable error. Retranscribe older projects for reliable alignment.
 

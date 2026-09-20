@@ -11,6 +11,8 @@ from .errors import VidPPError
 from .render import render
 from .template import load_template
 
+LOG = logging.getLogger(__name__)
+
 
 def _project(value: str) -> Path: return Path(value).resolve()
 
@@ -38,24 +40,44 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in {"import", "process"} and args.project_config and not args.project_config.is_file():
             raise VidPPError(f"project configuration does not exist: {args.project_config}")
         if args.command == "import":
+            LOG.info("Inspecting source and creating project...")
             create_project(args.source, args.project)
             if args.project_config: shutil.copyfile(args.project_config, args.project / "config.yaml")
             print(f"Created project: {args.project}")
             return 0
         if args.command == "process":
             project = args.project or Path(args.source.stem + ".vidpp")
+            LOG.info("Inspecting source and creating project...")
             create_project(args.source, project); template = load_template(args.template, args.hook)
             if args.project_config: shutil.copyfile(args.project_config, project / "config.yaml")
-            if args.transcript: save_transcript(project, args.transcript)
-            else: transcribe(project)
-            analyze(project, template); operations = plan(project, template); target = render(project, template)
+            if args.transcript:
+                LOG.info("Importing supplied transcript...")
+                save_transcript(project, args.transcript)
+            else:
+                transcribe(project)
+            LOG.info("Analyzing audio...")
+            analyze(project, template)
+            LOG.info("Planning edits...")
+            operations = plan(project, template)
+            LOG.info("Rendering final video...")
+            target = render(project, template)
             print(f"{len(operations)} proposed edits. Done: {target}"); return 0
         template = load_template(args.template, args.hook)
         if args.command == "transcribe":
-            save_transcript(args.project, args.transcript) if args.transcript else transcribe(args.project)
-        elif args.command == "analyze": analyze(args.project, template)
-        elif args.command == "plan": print(f"{len(plan(args.project, template))} proposed edits.")
-        else: print(f"Done: {render(args.project, template, preview=args.command == 'preview')}")
+            if args.transcript:
+                LOG.info("Importing supplied transcript...")
+                save_transcript(args.project, args.transcript)
+            else:
+                transcribe(args.project)
+        elif args.command == "analyze":
+            LOG.info("Analyzing audio...")
+            analyze(args.project, template)
+        elif args.command == "plan":
+            LOG.info("Planning edits...")
+            print(f"{len(plan(args.project, template))} proposed edits.")
+        else:
+            LOG.info("Rendering %s...", "preview" if args.command == "preview" else "final video")
+            print(f"Done: {render(args.project, template, preview=args.command == 'preview')}")
         return 0
     except VidPPError as exc:
         logging.error("%s", exc); return 2

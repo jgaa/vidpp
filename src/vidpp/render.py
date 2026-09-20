@@ -39,7 +39,16 @@ def write_ass(path: Path, transcript: list[TranscriptSegment], template: Templat
         lines.insert(2, "WrapStyle: 2")
         lines = [line.replace(",80,80,", f",{margin},{margin},") if line.startswith("Style:") else line for line in lines]
         available = template.width - 2 * margin - 2 * template.subtitle_outline_width
-        for item in caption_chunks(transcript, template.subtitle_max_lines, font=font, width=available):
+        for item in caption_chunks(
+            transcript,
+            template.subtitle_max_lines,
+            font=font,
+            width=available,
+            max_words=template.subtitle_max_words,
+            pause_threshold=template.subtitle_pause_threshold,
+            max_duration=template.subtitle_max_duration,
+            linger=template.subtitle_linger,
+        ):
             lines.append(f"Dialogue: 0,{_ass_time(item.start)},{_ass_time(item.end)},Caption,,0,0,0,,{_ass_text(item.text)}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

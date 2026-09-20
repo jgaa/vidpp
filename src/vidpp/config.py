@@ -12,7 +12,7 @@ from .errors import VidPPError
 @dataclass(frozen=True)
 class TranscriptionConfig:
     model: str = "turbo"
-    language: str | None = None
+    language: str = "en"
     phrases: tuple[str, ...] = ()
 
 
@@ -20,7 +20,7 @@ def transcription_config(project: Path) -> TranscriptionConfig:
     default = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "vidpp/config.yaml"
     explicit = os.environ.get("VIDPP_CONFIG")
     paths = [Path(explicit).expanduser() if explicit else default, project / "config.yaml"]
-    values = {"model": "turbo", "language": None}
+    values = {"model": "turbo", "language": "en"}
     phrases, seen = [], set()
     for path in paths:
         if not path.exists():

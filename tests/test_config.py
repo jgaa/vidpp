@@ -19,6 +19,13 @@ def test_merges_deduplicates_and_overrides(tmp_path, monkeypatch):
     assert transcription_config(project).model == "large-v3"
 
 
+def test_english_is_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("VIDPP_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "missing"))
+    monkeypatch.delenv("VIDPP_WHISPER_LANGUAGE", raising=False)
+    assert transcription_config(tmp_path).language == "en"
+
+
 @pytest.mark.parametrize("value", ['"VidPP"', '[42]', '[""]', 'null'])
 def test_rejects_bad_phrases(tmp_path, monkeypatch, value):
     path = tmp_path / "global.yaml"

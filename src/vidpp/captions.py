@@ -3,7 +3,10 @@ from dataclasses import replace
 import logging
 import subprocess
 
-from PIL import ImageFont
+try:
+    from PIL import ImageFont
+except ModuleNotFoundError:  # Existing editable installs may predate this dependency.
+    ImageFont = None
 
 from .errors import VidPPError
 from .models import TranscriptSegment, TranscriptWord
@@ -29,6 +32,11 @@ def timed_words(segment: TranscriptSegment) -> tuple[TranscriptWord, ...]:
 
 
 def caption_font(name: str, size: int):
+    if ImageFont is None:
+        raise VidPPError(
+            "Pillow is required for subtitle layout. Update the active virtual environment with "
+            "'python -m pip install -e .', then retry."
+        )
     try:
         LOG.debug("Resolving subtitle font: fc-match -f %%{file} %r", name)
         result = subprocess.run(["fc-match", "-f", "%{file}", name], capture_output=True, text=True, check=True)
@@ -39,9 +47,20 @@ def caption_font(name: str, size: int):
         raise VidPPError("Cannot resolve subtitle font; install fontconfig and the configured font") from exc
 
 
-def caption_chunks(segments: list[TranscriptSegment], max_lines: int = 2, *, font=None, width: int = 920) -> list[TranscriptSegment]:
+def caption_chunks(
+    segments: list[TranscriptSegment],
+    max_lines: int = 2,
+    *,
+    font=None,
+    width: int = 920,
+    max_words: int = 12,
+    pause_threshold: float = 0.45,
+    max_duration: float = 3.5,
+    linger: float = 1.0,
+) -> list[TranscriptSegment]:
+    """Group timed words into readable phrases and measured lines."""
     words = [word for segment in segments for word in timed_words(segment)]
-    result = []
+    raw_result = []
     current = []
 
     def wrap(items):
@@ -61,17 +80,35 @@ def caption_chunks(segments: list[TranscriptSegment], max_lines: int = 2, *, fon
     def flush():
         if current:
             text = "\n".join(wrap(current))
-            result.append(TranscriptSegment(current[0].start, max(current[-1].end, current[0].start + .01), text, tuple(current)))
-            LOG.debug("Caption %.3f–%.3f: %s", result[-1].start, result[-1].end, text)
+            raw_result.append(TranscriptSegment(current[0].start, max(current[-1].end, current[0].start + .01), text, tuple(current)))
             current.clear()
 
     for word in words:
-        if current and (word.start - current[-1].end > .45 or word.end - current[0].start > 3.5 or len(wrap([*current, word])) > max_lines):
+        candidate = [*current, word]
+        if current and (
+            word.start - current[-1].end > pause_threshold
+            or word.end - current[0].start > max_duration
+            or len(candidate) > max_words
+            or len(wrap(candidate)) > max_lines
+        ):
             flush()
         current.append(word)
-        if word.word.rstrip().endswith((".", "?", "!", ";")):
+        # Spoken sentence and clause boundaries are preferable to arbitrary size cuts.
+        if word.word.rstrip().endswith((".", "?", "!", ",", ";", ":")):
             flush()
     flush()
+
+    result = []
+    timeline_end = max((segment.end for segment in segments), default=0.0)
+    for index, caption in enumerate(raw_result):
+        next_start = raw_result[index + 1].start if index + 1 < len(raw_result) else timeline_end
+        # Extend only when speech was faster than a comfortable three words/second,
+        # never past the next caption and never more than the configured linger.
+        reading_end = caption.start + len(caption.words) / 3.0
+        end = min(max(caption.end, reading_end), caption.end + linger, next_start, timeline_end)
+        caption = replace(caption, end=max(caption.end, end))
+        result.append(caption)
+        LOG.debug("Caption %.3f–%.3f: %s", caption.start, caption.end, caption.text)
     return result
 
 

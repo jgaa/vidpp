@@ -34,6 +34,7 @@ def test_whisper_fallback_saves_its_json(tmp_path, monkeypatch):
     core.transcribe(tmp_path)
     assert calls[0][:3] == ["whisper", str(source), "--model"]
     assert calls[0][calls[0].index("--word_timestamps") + 1] == "True"
+    assert calls[0][calls[0].index("--language") + 1] == "en"
     assert (tmp_path / "transcript.json").is_file()
 
 

@@ -22,6 +22,23 @@ def test_caption_uses_actual_word_times_and_preserves_pause():
     assert [(c.start, c.end, c.text) for c in captions] == [(0, 1, "Many words"), (6.8, 7, "make")]
 
 
+def test_caption_prefers_commas_and_sentence_boundaries():
+    texts = ["First", "natural,", "then", "the", "next", "sentence.", "Finally"]
+    words = tuple(TranscriptWord(i * .3, (i + 1) * .3, text) for i, text in enumerate(texts))
+    captions = caption_chunks([TranscriptSegment(0, 2.1, " ".join(texts), words)], max_words=12)
+    assert [caption.text for caption in captions] == ["First natural,", "then the next sentence.", "Finally"]
+
+
+def test_caption_limits_words_and_leaves_long_pause_blank():
+    words = tuple(TranscriptWord(i * .2, (i + 1) * .2, f"w{i}") for i in range(8)) + (
+        TranscriptWord(4.0, 4.1, "after"),
+    )
+    captions = caption_chunks([TranscriptSegment(0, 5, "words", words)], max_words=4, linger=1.0)
+    assert all(len(caption.words) <= 4 for caption in captions)
+    assert captions[-2].end <= 2.6
+    assert captions[-1].start == 4.0
+
+
 def test_cut_removes_only_its_words():
     result = remap_transcript([segment()], [(0, .3), (6.8, 7)])
     assert [c.text for c in result] == ["Many", "make"]

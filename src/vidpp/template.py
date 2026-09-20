@@ -26,6 +26,13 @@ def _positive(value: Any, name: str, default: int | float) -> int | float:
     return value
 
 
+def _nonnegative(value: Any, name: str, default: int | float) -> int | float:
+    value = default if value is None else value
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise VidPPError(f"template.{name} must be non-negative")
+    return value
+
+
 def _asset(value: Any, template_path: Path, name: str) -> Path | None:
     if value is None:
         return None
@@ -65,6 +72,10 @@ class Template:
     normalize_audio: bool = True
     long_pause_threshold: float = 1.5
     target_pause: float = 0.4
+    subtitle_max_words: int = 12
+    subtitle_linger: float = 1.0
+    subtitle_pause_threshold: float = 0.45
+    subtitle_max_duration: float = 3.5
 
 
 def load_template(path: Path | None, hook_override: str | None = None) -> Template:
@@ -104,4 +115,4 @@ def load_template(path: Path | None, hook_override: str | None = None) -> Templa
     if not isinstance(hook_text, str): raise VidPPError("template.hook.text must be a string")
     enabled = hook.get("enabled", bool(hook_text))
     if not isinstance(enabled, bool): raise VidPPError("template.hook.enabled must be boolean")
-    return Template(width, height, fps, video_x, video_y, video_width, video_height, fit, _asset(video.get("background"), template_path, "video.background"), bool(subtitles.get("enabled", True)), str(subtitles.get("font", "Noto Sans")), int(_positive(subtitles.get("font_size"), "subtitles.font_size", 54)), color(subtitles, "color", "#FFFFFF"), color(subtitles, "outline_color", "#000000"), int(_positive(subtitles.get("outline_width"), "subtitles.outline_width", 3)), position, int(_positive(subtitles.get("bottom_margin"), "subtitles.bottom_margin", 180)), int(_positive(subtitles.get("max_lines"), "subtitles.max_lines", 2)), enabled, hook_text, _asset(hook.get("image"), template_path, "hook.image"), float(_positive(hook.get("duration"), "hook.duration", 4.0)), hook_position, bool(audio.get("normalize", True)), float(_positive(editing.get("long_pause_threshold"), "editing.long_pause_threshold", 1.5)), float(_positive(editing.get("target_pause"), "editing.target_pause", 0.4)))
+    return Template(width, height, fps, video_x, video_y, video_width, video_height, fit, _asset(video.get("background"), template_path, "video.background"), bool(subtitles.get("enabled", True)), str(subtitles.get("font", "Noto Sans")), int(_positive(subtitles.get("font_size"), "subtitles.font_size", 44)), color(subtitles, "color", "#FFFFFF"), color(subtitles, "outline_color", "#000000"), int(_positive(subtitles.get("outline_width"), "subtitles.outline_width", 3)), position, int(_positive(subtitles.get("bottom_margin"), "subtitles.bottom_margin", 180)), int(_positive(subtitles.get("max_lines"), "subtitles.max_lines", 2)), enabled, hook_text, _asset(hook.get("image"), template_path, "hook.image"), float(_positive(hook.get("duration"), "hook.duration", 4.0)), hook_position, bool(audio.get("normalize", True)), float(_positive(editing.get("long_pause_threshold"), "editing.long_pause_threshold", 1.5)), float(_positive(editing.get("target_pause"), "editing.target_pause", 0.4)), int(_positive(subtitles.get("max_words"), "subtitles.max_words", 12)), float(_nonnegative(subtitles.get("linger"), "subtitles.linger", 1.0)), float(_positive(subtitles.get("pause_threshold"), "subtitles.pause_threshold", 0.45)), float(_positive(subtitles.get("max_duration"), "subtitles.max_duration", 3.5)))

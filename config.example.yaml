@@ -1,7 +1,7 @@
 version: 1
 transcription:
   model: turbo
-  # language: en  # Omit to detect the spoken language.
+  language: en  # Use "auto" to detect the spoken language.
   phrases:
     - VidPP
     - OneRSS
