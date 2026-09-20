@@ -25,6 +25,25 @@ All Python packages are installed in `.venv`; the machine's shared Python enviro
 
 `transcript.json` contains timestamped segments, for example `{"segments":[{"start":0.0,"end":2.2,"text":"A short spoken sentence."}]}`. VidPP creates `source.vidpp/` by default, references rather than copies the source, retains the transcript, analysis and semantic edit plan, and writes `output/final.mp4`. Individual stages are `import`, `transcribe`, `analyze`, `plan`, `preview`, and `render`.
 
+### Output size and orientation
+
+The default destination is `p720` with automatic orientation. A landscape source produces 1280×720; a portrait source produces 720×1280. Auto treats a square source as landscape. The `p` value is the short edge of a 16:9 output and may be overridden for the complete pipeline or an individual render:
+
+```bash
+vidpp process source.mp4 --format p1080
+vidpp render project/ --format p720 --orientation portrait
+```
+
+Valid orientations are `auto`, `portrait`, and `landscape`. A template can set the same values:
+
+```yaml
+output:
+  format: p1080
+  orientation: auto
+```
+
+Explicit template `output.width` and `output.height` remain supported and take precedence when there is no CLI format/orientation override. Specify both dimensions together and do not combine them with `output.format`.
+
 The renderer needs local `ffmpeg`/`ffprobe` with libass and an installed subtitle font. It renders H.264/AAC MP4, edits detected long silences conservatively, composes an optional background and hook image, burns captions, and normalizes audio.
 
 ### Local transcription and editorial model
@@ -74,13 +93,15 @@ Captions use actual word boundaries and font-measured line breaks. Sentence endi
 ```yaml
 subtitles:
   max_lines: 2
-  max_words: 12
+  font_size: 54
+  max_words: 8
+  max_characters: 48
   max_duration: 3.5
   pause_threshold: 0.45
   linger: 1.0
 ```
 
-Durations are seconds. Font lookup requires `fontconfig` (`sudo apt-get install fontconfig` on Debian/Ubuntu). The default font size is 44 pixels at 1080-pixel output width and scales with the output width; an explicit `subtitles.font_size` is always in output pixels. Sentence grouping and short caption grouping are separate operations. Install updated dependencies in your active venv with `python -m pip install -e .`.
+`max_characters` counts letters and punctuation but not spaces or inserted line breaks. A single word is never split merely to satisfy that limit. Durations are seconds. Font lookup requires `fontconfig` (`sudo apt-get install fontconfig` on Debian/Ubuntu). The default font size is 54 pixels at p720 and scales with the output's short edge; an explicit `subtitles.font_size` is always in output pixels. Sentence grouping and short caption grouping are separate operations. Install updated dependencies in your active venv with `python -m pip install -e .`.
 
 Normal CLI output announces source inspection, model loading/transcription, audio analysis, edit planning, and rendering before each stage starts. Use `-v` for transcript decisions and executed commands.
 

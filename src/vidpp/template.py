@@ -9,6 +9,7 @@ import yaml
 from .errors import VidPPError
 
 _COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+_OUTPUT_FORMAT = re.compile(r"^p([1-9][0-9]{2,3})$")
 
 
 def _mapping(raw: Any, name: str) -> dict[str, Any]:
@@ -44,20 +45,53 @@ def _asset(value: Any, template_path: Path, name: str) -> Path | None:
     return candidate
 
 
+def output_dimensions(
+    output: dict[str, Any],
+    *,
+    source_width: int | None,
+    source_height: int | None,
+    format_override: str | None,
+    orientation_override: str | None,
+) -> tuple[int, int]:
+    has_width, has_height = "width" in output, "height" in output
+    if has_width != has_height:
+        raise VidPPError("template.output.width and height must be specified together")
+    if "format" in output and has_width:
+        raise VidPPError("template.output must use either format or width/height")
+    if has_width and format_override is None and orientation_override is None:
+        return int(_positive(output["width"], "output.width", 1280)), int(_positive(output["height"], "output.height", 720))
+
+    output_format = format_override or output.get("format", "p720")
+    if not isinstance(output_format, str) or not (match := _OUTPUT_FORMAT.fullmatch(output_format.casefold())):
+        raise VidPPError("output format must look like p720 or p1080")
+    short_edge = int(match.group(1))
+    if not 240 <= short_edge <= 4320:
+        raise VidPPError("output format must be between p240 and p4320")
+    long_edge = round(short_edge * 16 / 9)
+    long_edge += long_edge % 2
+
+    orientation = orientation_override or output.get("orientation", "auto")
+    if orientation not in {"auto", "portrait", "landscape"}:
+        raise VidPPError("output orientation must be auto, portrait, or landscape")
+    if orientation == "auto":
+        orientation = "portrait" if source_width is not None and source_height is not None and source_height > source_width else "landscape"
+    return (short_edge, long_edge) if orientation == "portrait" else (long_edge, short_edge)
+
+
 @dataclass(frozen=True)
 class Template:
-    width: int = 1080
-    height: int = 1920
+    width: int = 1280
+    height: int = 720
     fps: str | float = "source"
     video_x: int = 0
     video_y: int = 0
-    video_width: int = 1080
-    video_height: int = 1920
+    video_width: int = 1280
+    video_height: int = 720
     video_fit: str = "contain"
     background: Path | None = None
     subtitles_enabled: bool = True
     subtitle_font: str = "Noto Sans"
-    subtitle_font_size: int = 44
+    subtitle_font_size: int = 54
     subtitle_color: str = "#FFFFFF"
     subtitle_outline_color: str = "#000000"
     subtitle_outline_width: int = 3
@@ -72,13 +106,22 @@ class Template:
     normalize_audio: bool = True
     long_pause_threshold: float = 1.5
     target_pause: float = 0.4
-    subtitle_max_words: int = 12
+    subtitle_max_words: int = 8
     subtitle_linger: float = 1.0
     subtitle_pause_threshold: float = 0.45
     subtitle_max_duration: float = 3.5
+    subtitle_max_characters: int = 48
 
 
-def load_template(path: Path | None, hook_override: str | None = None) -> Template:
+def load_template(
+    path: Path | None,
+    hook_override: str | None = None,
+    *,
+    source_width: int | None = None,
+    source_height: int | None = None,
+    output_format: str | None = None,
+    orientation: str | None = None,
+) -> Template:
     if path is None:
         data: dict[str, Any] = {}
         template_path = Path.cwd() / "default.yaml"
@@ -92,9 +135,9 @@ def load_template(path: Path | None, hook_override: str | None = None) -> Templa
         template_path = path.resolve()
     output, video, subtitles = _mapping(data.get("output"), "output"), _mapping(data.get("video"), "video"), _mapping(data.get("subtitles"), "subtitles")
     hook, audio, editing = _mapping(data.get("hook"), "hook"), _mapping(data.get("audio"), "audio"), _mapping(data.get("editing"), "editing")
-    width, height = int(_positive(output.get("width"), "output.width", 1080)), int(_positive(output.get("height"), "output.height", 1920))
+    width, height = output_dimensions(output, source_width=source_width, source_height=source_height, format_override=output_format, orientation_override=orientation)
     # Defaults scale with output width; explicit font sizes remain output pixels.
-    subtitles.setdefault("font_size", max(12, round(width * 44 / 1080)))
+    subtitles.setdefault("font_size", max(12, round(min(width, height) * 54 / 720)))
     subtitles.setdefault("bottom_margin", max(8, round(height * 180 / 1920)))
     fps = output.get("fps", "source")
     if fps != "source": _positive(fps, "output.fps", 30)
@@ -115,4 +158,4 @@ def load_template(path: Path | None, hook_override: str | None = None) -> Templa
     if not isinstance(hook_text, str): raise VidPPError("template.hook.text must be a string")
     enabled = hook.get("enabled", bool(hook_text))
     if not isinstance(enabled, bool): raise VidPPError("template.hook.enabled must be boolean")
-    return Template(width, height, fps, video_x, video_y, video_width, video_height, fit, _asset(video.get("background"), template_path, "video.background"), bool(subtitles.get("enabled", True)), str(subtitles.get("font", "Noto Sans")), int(_positive(subtitles.get("font_size"), "subtitles.font_size", 44)), color(subtitles, "color", "#FFFFFF"), color(subtitles, "outline_color", "#000000"), int(_positive(subtitles.get("outline_width"), "subtitles.outline_width", 3)), position, int(_positive(subtitles.get("bottom_margin"), "subtitles.bottom_margin", 180)), int(_positive(subtitles.get("max_lines"), "subtitles.max_lines", 2)), enabled, hook_text, _asset(hook.get("image"), template_path, "hook.image"), float(_positive(hook.get("duration"), "hook.duration", 4.0)), hook_position, bool(audio.get("normalize", True)), float(_positive(editing.get("long_pause_threshold"), "editing.long_pause_threshold", 1.5)), float(_positive(editing.get("target_pause"), "editing.target_pause", 0.4)), int(_positive(subtitles.get("max_words"), "subtitles.max_words", 12)), float(_nonnegative(subtitles.get("linger"), "subtitles.linger", 1.0)), float(_positive(subtitles.get("pause_threshold"), "subtitles.pause_threshold", 0.45)), float(_positive(subtitles.get("max_duration"), "subtitles.max_duration", 3.5)))
+    return Template(width, height, fps, video_x, video_y, video_width, video_height, fit, _asset(video.get("background"), template_path, "video.background"), bool(subtitles.get("enabled", True)), str(subtitles.get("font", "Noto Sans")), int(_positive(subtitles.get("font_size"), "subtitles.font_size", 54)), color(subtitles, "color", "#FFFFFF"), color(subtitles, "outline_color", "#000000"), int(_positive(subtitles.get("outline_width"), "subtitles.outline_width", 3)), position, int(_positive(subtitles.get("bottom_margin"), "subtitles.bottom_margin", 180)), int(_positive(subtitles.get("max_lines"), "subtitles.max_lines", 2)), enabled, hook_text, _asset(hook.get("image"), template_path, "hook.image"), float(_positive(hook.get("duration"), "hook.duration", 4.0)), hook_position, bool(audio.get("normalize", True)), float(_positive(editing.get("long_pause_threshold"), "editing.long_pause_threshold", 1.5)), float(_positive(editing.get("target_pause"), "editing.target_pause", 0.4)), int(_positive(subtitles.get("max_words"), "subtitles.max_words", 8)), float(_nonnegative(subtitles.get("linger"), "subtitles.linger", 1.0)), float(_positive(subtitles.get("pause_threshold"), "subtitles.pause_threshold", 0.45)), float(_positive(subtitles.get("max_duration"), "subtitles.max_duration", 3.5)), int(_positive(subtitles.get("max_characters"), "subtitles.max_characters", 48)))

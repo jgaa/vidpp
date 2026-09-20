@@ -53,7 +53,8 @@ def caption_chunks(
     *,
     font=None,
     width: int = 920,
-    max_words: int = 12,
+    max_words: int = 8,
+    max_characters: int = 48,
     pause_threshold: float = 0.45,
     max_duration: float = 3.5,
     linger: float = 1.0,
@@ -89,6 +90,7 @@ def caption_chunks(
             word.start - current[-1].end > pause_threshold
             or word.end - current[0].start > max_duration
             or len(candidate) > max_words
+            or sum(len(item.word.strip()) for item in candidate) > max_characters
             or len(wrap(candidate)) > max_lines
         ):
             flush()

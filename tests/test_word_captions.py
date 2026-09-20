@@ -39,6 +39,17 @@ def test_caption_limits_words_and_leaves_long_pause_blank():
     assert captions[-1].start == 4.0
 
 
+def test_caption_limits_non_space_characters():
+    texts = ["abcdefghij", "klmnopqrst", "uvwxyzabcd", "efghijklmn"]
+    words = tuple(TranscriptWord(i * .5, (i + 1) * .5, text) for i, text in enumerate(texts))
+    captions = caption_chunks(
+        [TranscriptSegment(0, 2, " ".join(texts), words)],
+        max_words=20,
+        max_characters=21,
+    )
+    assert [len(caption.text.replace("\n", "").replace(" ", "")) for caption in captions] == [20, 20]
+
+
 def test_cut_removes_only_its_words():
     result = remap_transcript([segment()], [(0, .3), (6.8, 7)])
     assert [c.text for c in result] == ["Many", "make"]

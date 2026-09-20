@@ -8,7 +8,7 @@ def test_shorten_pause_generates_short_retained_range(tmp_path):
     assert timeline_ranges(ops, 7) == [(0.0, 2), (2, 2.4), (5, 7)]
     graph = build_filter(7, ops, Template(), tmp_path / "captions.ass")
     assert "concat=n=3" in graph
-    assert "pad=1080:1920" in graph
+    assert "pad=1280:720" in graph
 
 
 def test_caption_timestamps_follow_cut_timeline():

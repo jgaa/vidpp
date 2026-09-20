@@ -45,6 +45,7 @@ def write_ass(path: Path, transcript: list[TranscriptSegment], template: Templat
             font=font,
             width=available,
             max_words=template.subtitle_max_words,
+            max_characters=template.subtitle_max_characters,
             pause_threshold=template.subtitle_pause_threshold,
             max_duration=template.subtitle_max_duration,
             linger=template.subtitle_linger,

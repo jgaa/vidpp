@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 import shutil
 
-from .core import analyze, create_project, plan, save_transcript, transcribe
+from .core import analyze, create_project, plan, project_data, save_transcript, transcribe
 from .errors import VidPPError
 from .render import render
 from .template import load_template
@@ -27,9 +27,14 @@ def parser() -> argparse.ArgumentParser:
     for name in ("transcribe", "analyze", "plan", "render", "preview"):
         cmd = commands.add_parser(name); cmd.add_argument("project", type=_project); cmd.add_argument("--template", type=Path); cmd.add_argument("--hook")
         if name == "transcribe": cmd.add_argument("--transcript", type=Path)
+        if name in {"render", "preview"}:
+            cmd.add_argument("--format", dest="output_format", metavar="p720")
+            cmd.add_argument("--orientation", choices=("auto", "portrait", "landscape"))
     process = commands.add_parser("process", help="run the complete pipeline")
     process.add_argument("source", type=Path); process.add_argument("--project", type=Path); process.add_argument("--template", type=Path); process.add_argument("--hook"); process.add_argument("--transcript", type=Path)
     process.add_argument("--project-config", type=Path)
+    process.add_argument("--format", dest="output_format", metavar="p720")
+    process.add_argument("--orientation", choices=("auto", "portrait", "landscape"))
     return app
 
 
@@ -48,7 +53,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "process":
             project = args.project or Path(args.source.stem + ".vidpp")
             LOG.info("Inspecting source and creating project...")
-            create_project(args.source, project); template = load_template(args.template, args.hook)
+            metadata = create_project(args.source, project)
+            source = metadata["source"]
+            template = load_template(args.template, args.hook, source_width=source["width"], source_height=source["height"], output_format=args.output_format, orientation=args.orientation)
+            LOG.info("Output format: %dx%d", template.width, template.height)
             if args.project_config: shutil.copyfile(args.project_config, project / "config.yaml")
             if args.transcript:
                 LOG.info("Importing supplied transcript...")
@@ -62,7 +70,6 @@ def main(argv: list[str] | None = None) -> int:
             LOG.info("Rendering final video...")
             target = render(project, template)
             print(f"{len(operations)} proposed edits. Done: {target}"); return 0
-        template = load_template(args.template, args.hook)
         if args.command == "transcribe":
             if args.transcript:
                 LOG.info("Importing supplied transcript...")
@@ -71,12 +78,19 @@ def main(argv: list[str] | None = None) -> int:
                 transcribe(args.project)
         elif args.command == "analyze":
             LOG.info("Analyzing audio...")
+            metadata = project_data(args.project)["source"]
+            template = load_template(args.template, args.hook, source_width=metadata["width"], source_height=metadata["height"])
             analyze(args.project, template)
         elif args.command == "plan":
             LOG.info("Planning edits...")
+            metadata = project_data(args.project)["source"]
+            template = load_template(args.template, args.hook, source_width=metadata["width"], source_height=metadata["height"])
             print(f"{len(plan(args.project, template))} proposed edits.")
         else:
             LOG.info("Rendering %s...", "preview" if args.command == "preview" else "final video")
+            metadata = project_data(args.project)["source"]
+            template = load_template(args.template, args.hook, source_width=metadata["width"], source_height=metadata["height"], output_format=args.output_format, orientation=args.orientation)
+            LOG.info("Output format: %dx%d", template.width, template.height)
             print(f"Done: {render(args.project, template, preview=args.command == 'preview')}")
         return 0
     except VidPPError as exc:
