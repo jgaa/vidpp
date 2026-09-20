@@ -97,17 +97,20 @@ def test_optional_crisperwhisper_backend(tmp_path, monkeypatch):
     )
     monkeypatch.delenv("VIDPP_TRANSCRIBE_COMMAND", raising=False)
     monkeypatch.setattr(core.importlib.util, "find_spec", lambda _: object())
-    calls = []
+    calls, crisper_calls = [], []
     def fake_run(command, **kwargs):
         calls.append(command)
-        (tmp_path / "transcript.json").write_text('{"segments":[{"start":0,"end":1,"text":"um hello","words":[{"word":"um","start":0,"end":0.3},{"word":"hello","start":0.4,"end":1}]}]}')
+    def fake_crisper(audio, target, settings, language):
+        crisper_calls.append((audio, settings, language))
+        target.write_text('{"segments":[{"start":0,"end":1,"text":"um hello","words":[{"word":"um","start":0,"end":0.3},{"word":"hello","start":0.4,"end":1}]}]}')
     monkeypatch.setattr(core, "run", fake_run)
+    monkeypatch.setattr(core, "_run_crisper", fake_crisper)
 
     core.transcribe(tmp_path)
     assert calls[0][0] == "ffmpeg"
-    assert calls[1][:3] == [core.sys.executable, "-m", "vidpp.crisper_runner"]
-    assert calls[1][calls[1].index("--backend") + 1] == "transformers"
-    assert calls[1][calls[1].index("--model") + 1] == "medium"
+    assert len(calls) == 1
+    assert crisper_calls[0][1].crisper_backend == "transformers"
+    assert crisper_calls[0][1].model == "medium"
 
 
 def test_missing_crisperwhisper_is_actionable(tmp_path, monkeypatch):
@@ -117,3 +120,17 @@ def test_missing_crisperwhisper_is_actionable(tmp_path, monkeypatch):
     monkeypatch.setattr(core.importlib.util, "find_spec", lambda _: None)
     with pytest.raises(VidPPError, match=r"crisperwhisper\[transformers\]"):
         core.transcribe(tmp_path)
+
+
+def test_crisper_result_becomes_word_timestamp_transcript():
+    from types import SimpleNamespace
+    from vidpp.models import TranscriptSegment
+    result = SimpleNamespace(language="en", words=[
+        SimpleNamespace(word="So,", start=0.1, end=0.4),
+        SimpleNamespace(word="I'm...", start=0.5, end=1.0),
+        SimpleNamespace(word="again.", start=2.0, end=2.5),
+    ])
+    payload = core._crisper_payload(result)
+    segments = [TranscriptSegment.from_dict(item) for item in payload["segments"]]
+    assert payload["engine"] == "crisperwhisper"
+    assert [segment.text for segment in segments] == ["So, I'm...", "again."]

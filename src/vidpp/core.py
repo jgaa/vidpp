@@ -13,7 +13,6 @@ import shlex
 import shutil
 import socket
 import subprocess
-import sys
 import urllib.request
 
 from .errors import VidPPError
@@ -216,6 +215,55 @@ def _words_payload(words: list[Any], language: str | None = None) -> dict[str, A
     return payload
 
 
+def _crisper_payload(result: object) -> dict[str, Any]:
+    raw_words = getattr(result, "words", None)
+    if not raw_words:
+        raise VidPPError("CrisperWhisper returned no word timestamps")
+    words = [
+        {"word": word.word, "start": float(word.start), "end": float(word.end)}
+        for word in raw_words
+    ]
+    segments, current = [], []
+    for word in words:
+        if current and word["start"] - current[-1]["end"] >= 0.75:
+            segments.append(current)
+            current = []
+        current.append(word)
+        if word["word"].rstrip().endswith((".", "?", "!")) or len(current) >= 24:
+            segments.append(current)
+            current = []
+    if current:
+        segments.append(current)
+    output_segments = []
+    for index, group in enumerate(segments):
+        text = re.sub(r"\s+([,.?!;:])", r"\1", " ".join(word["word"].strip() for word in group))
+        output_segments.append({
+            "id": index, "start": group[0]["start"], "end": max(word["end"] for word in group),
+            "text": text, "words": group,
+        })
+    return {
+        "text": " ".join(segment["text"] for segment in output_segments),
+        "language": getattr(result, "language", None), "engine": "crisperwhisper",
+        "mode": "verbatim", "segments": output_segments,
+    }
+
+
+def _run_crisper(audio: Path, target: Path, settings: Any, language: str) -> None:
+    try:
+        from crisperwhisper import CrisperWhisperModel
+
+        model = CrisperWhisperModel(settings.model, backend=settings.crisper_backend)
+        hotwords = list(settings.phrases) if "_pro" in settings.model.casefold() and settings.phrases else None
+        result = model.transcribe(
+            str(audio), language=language, mode="verbatim", word_timestamps=True, hotwords=hotwords,
+        )
+        write_json(target, _crisper_payload(result))
+    except VidPPError:
+        raise
+    except Exception as exc:
+        raise VidPPError(f"CrisperWhisper transcription failed: {exc}") from exc
+
+
 def _reconcile_transcripts(primary: list[Any], recovery: list[Any], intervals: list[tuple[float, float]]) -> tuple[dict[str, Any], int]:
     primary_words = [word for segment in primary for word in segment.words]
     recovery_words = [word for segment in recovery for word in segment.words]
@@ -260,21 +308,15 @@ def transcribe(project: Path) -> None:
         audio = project / "cache/crisper-audio.wav"
         LOG.info("Extracting mono audio for CrisperWhisper...")
         run(["ffmpeg", "-y", "-i", source, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(audio)])
-        command = [
-            sys.executable, "-m", "vidpp.crisper_runner", str(audio), str(target),
-            "--model", settings.model, "--backend", settings.crisper_backend, "--language", language,
-        ]
         if settings.phrases:
-            if "_pro" in settings.model.casefold():
-                for phrase in settings.phrases: command.extend(["--hotword", phrase])
-            else:
+            if "_pro" not in settings.model.casefold():
                 LOG.warning("Not passing configured phrases: CrisperWhisper supports hotwords only on licensed Pro models")
         LOG.warning("CrisperWhisper model weights have separate usage terms; verify that model's license for this project")
         LOG.info("Loading CrisperWhisper model %s (%s backend) and transcribing in verbatim mode...",
                  settings.model, settings.crisper_backend)
         LOG.debug("CrisperWhisper configuration: %s", asdict(settings))
         write_json(project / "cache/transcription-settings.json", asdict(settings))
-        run(command, capture=False)
+        _run_crisper(audio, target, settings, language)
         if not target.is_file():
             raise VidPPError("CrisperWhisper completed without producing its expected JSON transcript")
     else:

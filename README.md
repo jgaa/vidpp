@@ -113,14 +113,14 @@ vidpp transcribe project/
 
 The supplied configuration is copied to `project/config.yaml`. For an existing project, edit that file and rerun `vidpp transcribe project/`. VidPP detects suspicious alignment—leading untranscribed audio, words stretched beyond two seconds, or unexplained word gaps—and runs a context-independent Whisper recovery pass only over those regions. A region is replaced only when recovery finds more words, so a weaker second pass cannot silently discard primary text. The raw primary and recovery results remain in `cache/` and `cache/recovery/`; reconciliation details are in `cache/transcription-recovery.json`. By default the recovery pass uses the primary model. Set `recovery_model: large-v3` (or `VIDPP_WHISPER_RECOVERY_MODEL=large-v3`) for higher quality at the cost of a larger model and slower loading. Word timestamps and confidence are retained in `transcript.json`; deterministic sentence grouping is written to `cache/sentences.json`.
 
-### Optional CrisperWhisper transcription
+### CrisperWhisper transcription
 
-[CrisperWhisper 2](https://github.com/nyrahealth/CrisperWhisper) can replace OpenAI Whisper for verbatim transcription. Its verbatim mode is designed to retain filler words, repetitions, stutters, and false starts, and VidPP requests word-level timestamps. It is optional and is never installed or selected implicitly.
+[CrisperWhisper 2](https://github.com/nyrahealth/CrisperWhisper) can replace OpenAI Whisper for verbatim transcription. Its verbatim mode is designed to retain filler words, repetitions, stutters, and false starts, and VidPP requests word-level timestamps. The Transformers implementation is installed with VidPP's normal dependencies, but this engine is never selected implicitly.
 
-For an AMD system, use the portable Transformers backend inside the VidPP virtual environment:
+After pulling a dependency update, refresh the active virtual environment:
 
 ```bash
-python -m pip install "crisperwhisper[transformers]"
+python -m pip install -e .
 ```
 
 Then configure it globally or in `project/config.yaml`:
