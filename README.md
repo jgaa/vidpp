@@ -148,6 +148,8 @@ Optional editorial analysis uses a local OpenAI-compatible server only when both
 ```bash
 export VIDPP_LLM_BASE_URL=http://model-machine:8000/v1
 export VIDPP_LLM_MODEL=Qwen3-4B-Instruct
+# Optional; local thinking models may need several minutes. Default: 600 seconds.
+export VIDPP_LLM_TIMEOUT=600
 ```
 
 ### llama.cpp server on an AMD Vulkan system
@@ -188,3 +190,5 @@ export VIDPP_LLM_MODEL=vidpp-editor
 For a model server on another trusted machine, replace `127.0.0.1` in `--host` and `VIDPP_LLM_BASE_URL` with its private-network address, set `--api-key` on `llama-server`, and export the same value as `VIDPP_LLM_API_KEY` for VidPP. Do not expose the server directly to the public internet; use a firewall and reverse proxy if that is unavoidable.
 
 The model receives structured transcript and silence observations and can only return schema-validated semantic operations; it cannot run commands or construct FFmpeg filters. Without these variables VidPP still produces a deterministic pause-edit plan.
+
+VidPP sends the editorial model a compact sequence of timestamped transcript blocks instead of duplicating Whisper's segment, word, and sentence representations. Every proposed speech cut must use the supplied block boundaries. `VIDPP_LLM_TIMEOUT` controls the HTTP wait in seconds (default `600`, valid range `1`–`86400`). While waiting, llama.cpp prints prompt-ingestion and generation progress in its server terminal; VidPP announces the selected model, block count, and timeout. If a request still times out, increase the timeout or use a smaller/faster instruct model.
