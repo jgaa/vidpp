@@ -14,9 +14,19 @@ def test_merges_deduplicates_and_overrides(tmp_path, monkeypatch):
     monkeypatch.delenv("VIDPP_WHISPER_MODEL", raising=False)
     config = transcription_config(project)
     assert config.model == "turbo"
+    assert config.recovery_model == "turbo"
     assert config.phrases == ("VidPP", "end to end", "OneRSS")
     monkeypatch.setenv("VIDPP_WHISPER_MODEL", "large-v3")
     assert transcription_config(project).model == "large-v3"
+
+
+def test_recovery_model_can_be_configured(tmp_path, monkeypatch):
+    path = tmp_path / "global.yaml"
+    path.write_text('transcription:\n  model: turbo\n  recovery_model: large-v3\n')
+    monkeypatch.setenv("VIDPP_CONFIG", str(path))
+    monkeypatch.delenv("VIDPP_WHISPER_MODEL", raising=False)
+    monkeypatch.delenv("VIDPP_WHISPER_RECOVERY_MODEL", raising=False)
+    assert transcription_config(tmp_path).recovery_model == "large-v3"
 
 
 def test_english_is_default(tmp_path, monkeypatch):

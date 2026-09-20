@@ -90,6 +90,7 @@ Global settings live in `$XDG_CONFIG_HOME/vidpp/config.yaml`, normally `~/.confi
 version: 1
 transcription:
   model: turbo
+  recovery_model: turbo
   language: en
   phrases:
     - VidPP
@@ -97,7 +98,7 @@ transcription:
     - end-to-end encryption
 ```
 
-Project model/language settings override global settings; `VIDPP_WHISPER_MODEL` and `VIDPP_WHISPER_LANGUAGE` override both. Phrase lists are combined in global-then-project order, normalized for Unicode and whitespace, and deduplicated case-insensitively while keeping the first spelling. The combined vocabulary is passed to Whisper as `--initial_prompt`. Keep it focused: Whisper has a limited prompt context and vocabulary hints cannot force a recognition. The effective settings are saved in `cache/transcription-settings.json` and logged at debug level. Whisper documents this prompt as useful for names and vocabulary in its [transcription implementation](https://github.com/openai/whisper/blob/main/whisper/transcribe.py).
+Project model/language settings override global settings; `VIDPP_WHISPER_MODEL`, `VIDPP_WHISPER_RECOVERY_MODEL`, and `VIDPP_WHISPER_LANGUAGE` override them. Phrase lists are combined in global-then-project order, normalized for Unicode and whitespace, and deduplicated case-insensitively while keeping the first spelling. The combined vocabulary is passed to Whisper as `--initial_prompt`. Keep it focused: Whisper has a limited prompt context and vocabulary hints cannot force a recognition. The effective settings are saved in `cache/transcription-settings.json` and logged at debug level. Whisper documents this prompt as useful for names and vocabulary in its [transcription implementation](https://github.com/openai/whisper/blob/main/whisper/transcribe.py).
 
 For a new project, supply its configuration before transcription:
 
@@ -108,7 +109,7 @@ vidpp import source.mp4 project/ --project-config recording-config.yaml
 vidpp transcribe project/
 ```
 
-The supplied configuration is copied to `project/config.yaml`. For an existing project, edit that file and rerun `vidpp transcribe project/`. Raw Whisper JSON remains in `cache/`; word timestamps and confidence are retained in `transcript.json`. A deterministic second stage groups words into sentences in `cache/sentences.json`; it does not run a second recognizer or change the words.
+The supplied configuration is copied to `project/config.yaml`. For an existing project, edit that file and rerun `vidpp transcribe project/`. VidPP detects suspicious alignment—leading untranscribed audio, words stretched beyond two seconds, or unexplained word gaps—and runs a context-independent Whisper recovery pass only over those regions. A region is replaced only when recovery finds more words, so a weaker second pass cannot silently discard primary text. The raw primary and recovery results remain in `cache/` and `cache/recovery/`; reconciliation details are in `cache/transcription-recovery.json`. By default the recovery pass uses the primary model. Set `recovery_model: large-v3` (or `VIDPP_WHISPER_RECOVERY_MODEL=large-v3`) for higher quality at the cost of a larger model and slower loading. Word timestamps and confidence are retained in `transcript.json`; deterministic sentence grouping is written to `cache/sentences.json`.
 
 ### Captions and reviewing edits
 

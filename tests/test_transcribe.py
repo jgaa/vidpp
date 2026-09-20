@@ -59,3 +59,32 @@ def test_failed_whisper_is_actionable(monkeypatch):
     monkeypatch.setattr(core.subprocess, "run", fail)
     with pytest.raises(VidPPError, match="command failed"):
         core.run(["whisper"], capture=False)
+
+
+def test_recovery_pass_replaces_stretched_opening_words(tmp_path, monkeypatch):
+    source = _project(tmp_path)
+    (tmp_path / "project.json").write_text(json.dumps({"version": 1, "source_path": str(source), "source": {"duration": 12}}))
+    monkeypatch.delenv("VIDPP_TRANSCRIBE_COMMAND", raising=False)
+    monkeypatch.setattr(core.shutil, "which", lambda _: "/venv/bin/whisper")
+    calls = []
+    primary = {"language": "en", "segments": [{"start": 3, "end": 10, "text": "So I begin", "words": [
+        {"word": "So", "start": 3, "end": 3.5}, {"word": "I", "start": 3.5, "end": 7},
+        {"word": "begin", "start": 7, "end": 10}]}]}
+    recovery = {"language": "en", "segments": [{"start": 1, "end": 10, "text": "So I'm So I'm I begin", "words": [
+        {"word": "So", "start": 1, "end": 1.3}, {"word": "I'm", "start": 1.3, "end": 1.8},
+        {"word": "So", "start": 2.2, "end": 2.5}, {"word": "I'm", "start": 2.5, "end": 3},
+        {"word": "I", "start": 6, "end": 6.4}, {"word": "begin", "start": 7, "end": 8}]}]}
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        output_dir = Path(command[command.index("--output_dir") + 1])
+        output_dir.mkdir(exist_ok=True)
+        output_dir.joinpath("source.json").write_text(json.dumps(recovery if "--clip_timestamps" in command else primary))
+    from pathlib import Path
+    monkeypatch.setattr(core, "run", fake_run)
+
+    core.transcribe(tmp_path)
+    transcript = json.loads((tmp_path / "transcript.json").read_text())
+    assert len(calls) == 2
+    assert calls[1][calls[1].index("--condition_on_previous_text") + 1] == "False"
+    assert "So I'm So I'm" in transcript["text"]
+    assert (tmp_path / "cache/transcription-recovery.json").is_file()

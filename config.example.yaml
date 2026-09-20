@@ -1,6 +1,7 @@
 version: 1
 transcription:
   model: turbo
+  recovery_model: turbo  # Use large-v3 for the strongest targeted recovery pass.
   language: en  # Use "auto" to detect the spoken language.
   phrases:
     - VidPP

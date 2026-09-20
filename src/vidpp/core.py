@@ -162,6 +162,77 @@ def save_transcript(project: Path, transcript: Path) -> None:
     write_json(project / "transcript.json", payload)
 
 
+def _recovery_intervals(transcript: list[Any], duration: float) -> list[tuple[float, float]]:
+    words = [word for segment in transcript for word in segment.words]
+    if not words:
+        return []
+    suspect: list[tuple[float, float]] = []
+    if words[0].start > 0.75:
+        suspect.append((0.0, words[0].end))
+    for word in words:
+        if word.end - word.start > 2.0:
+            suspect.append((word.start, word.end))
+    for left, right in zip(words, words[1:]):
+        if right.start - left.end > 2.0:
+            suspect.append((left.end, right.start))
+    padded = sorted((max(0.0, start - 1.0), min(duration, end + 1.0)) for start, end in suspect)
+    merged: list[tuple[float, float]] = []
+    for start, end in padded:
+        if merged and start <= merged[-1][1] + 0.25:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _words_payload(words: list[Any], language: str | None = None) -> dict[str, Any]:
+    """Build deterministic transcript segments from a reconciled word timeline."""
+    segments, current = [], []
+    for word in words:
+        if current and word.start - current[-1].end >= 0.75:
+            segments.append(current)
+            current = []
+        current.append(word)
+        if word.word.rstrip().endswith((".", "?", "!")) or len(current) >= 24:
+            segments.append(current)
+            current = []
+    if current:
+        segments.append(current)
+    payload_segments = []
+    for index, group in enumerate(segments):
+        text = re.sub(r"\s+([,.?!;:])", r"\1", " ".join(word.word.strip() for word in group))
+        payload_segments.append({
+            "id": index, "start": group[0].start, "end": max(word.end for word in group), "text": text,
+            "words": [asdict(word) for word in group],
+        })
+    payload: dict[str, Any] = {
+        "text": " ".join(segment["text"] for segment in payload_segments),
+        "segments": payload_segments,
+    }
+    if language:
+        payload["language"] = language
+    return payload
+
+
+def _reconcile_transcripts(primary: list[Any], recovery: list[Any], intervals: list[tuple[float, float]]) -> tuple[dict[str, Any], int]:
+    primary_words = [word for segment in primary for word in segment.words]
+    recovery_words = [word for segment in recovery for word in segment.words]
+    result = list(primary_words)
+    recovered_count = 0
+    for start, end in intervals:
+        replacements = [word for word in recovery_words if start <= (word.start + word.end) / 2 <= end]
+        originals = [word for word in result if start <= (word.start + word.end) / 2 <= end]
+        if len(replacements) <= len(originals):
+            LOG.debug("Keeping %d primary words for %.3f-%.3f; recovery found only %d",
+                      len(originals), start, end, len(replacements))
+            continue
+        result = [word for word in result if not start <= (word.start + word.end) / 2 <= end]
+        result.extend(replacements)
+        recovered_count += len(replacements)
+    result.sort(key=lambda word: (word.start, word.end))
+    return _words_payload(result), recovered_count
+
+
 def transcribe(project: Path) -> None:
     """Use an explicit local adapter, otherwise local Whisper, to produce a transcript."""
     command_text = os.environ.get("VIDPP_TRANSCRIBE_COMMAND")
@@ -196,6 +267,39 @@ def transcribe(project: Path) -> None:
         if not whisper_json.is_file():
             raise VidPPError("Whisper completed without producing its expected JSON transcript")
         save_transcript(project, whisper_json)
+        primary = load_transcript(target)
+        duration = float(project_data(project)["source"]["duration"])
+        intervals = _recovery_intervals(primary, duration)
+        if intervals:
+            recovery_cache = cache / "recovery"
+            recovery_cache.mkdir(exist_ok=True)
+            clips = ",".join(f"{value:.3f}" for interval in intervals for value in interval)
+            recovery_command = [
+                "whisper", source, "--model", settings.recovery_model, "--output_dir", str(recovery_cache),
+                "--output_format", "json", "--fp16", "False", "--word_timestamps", "True",
+                "--condition_on_previous_text", "False", "--clip_timestamps", clips,
+            ]
+            if language.casefold() != "auto": recovery_command.extend(["--language", language])
+            if settings.phrases: recovery_command.extend(["--initial_prompt", ", ".join(settings.phrases)])
+            LOG.info("Recovering %d suspicious transcript region(s) with Whisper model %s...", len(intervals), settings.recovery_model)
+            LOG.debug("Suspicious transcript regions: %s", intervals)
+            run(recovery_command, capture=False)
+            recovery_json = recovery_cache / (Path(source).stem + ".json")
+            if not recovery_json.is_file():
+                raise VidPPError("Whisper recovery pass completed without producing its expected JSON transcript")
+            recovery = load_transcript(recovery_json)
+            primary_raw = json.loads(whisper_json.read_text(encoding="utf-8"))
+            reconciled, recovered_count = _reconcile_transcripts(primary, recovery, intervals)
+            if primary_raw.get("language"):
+                reconciled["language"] = primary_raw["language"]
+            write_json(target, reconciled)
+            write_json(cache / "transcription-recovery.json", {
+                "intervals": [{"start": start, "end": end} for start, end in intervals],
+                "primary_words": sum(len(segment.words) for segment in primary),
+                "recovery_words_used": recovered_count,
+                "model": settings.recovery_model,
+            })
+            LOG.info("Reconciled %d recovery-pass words into the transcript.", recovered_count)
     load_transcript(target)
     # Sentence grouping is a second deterministic stage, independent of captions.
     sentences, current = [], []
