@@ -21,6 +21,17 @@ python -m pip install -e .
 vidpp process source.mp4 --transcript transcript.json --template template.yaml --hook "Why privacy matters"
 ```
 
+The effective hook is saved as `hook` in `project.json`. Later renders therefore
+do not need it repeated:
+
+```bash
+vidpp render source.vidpp
+```
+
+An explicit `--hook` updates the saved project value. Use `--hook ""` to clear
+it. Hook precedence is an explicit CLI value, then the saved project hook, then
+the template's `hook.text`.
+
 For a source that is already edited, keep the full timeline and run only transcription, subtitles, template processing, audio processing, and rendering:
 
 ```bash
@@ -58,7 +69,7 @@ vidpp plan combined.vidpp
 vidpp render combined.vidpp
 ```
 
-Multiple inputs are normalized and concatenated into `cache/master.mp4`. Transcription, analysis, semantic edits, captions, and rendering use that continuous master timeline. The original videos are only read. `project.json` retains every original absolute path, its inspected metadata, and its start/end on the master timeline. If the cached master is deleted, VidPP rebuilds it from the originals.
+Multiple inputs are normalized and concatenated into `cache/master.mp4`. Transcription, analysis, semantic edits, captions, and rendering use that continuous master timeline. The original videos are only read. `project.json` retains the project hook, every original absolute path, its inspected metadata, and its start/end on the master timeline. If the cached master is deleted, VidPP rebuilds it from the originals.
 
 Use `--project-name` when only a local project name is needed; VidPP appends `.vidpp`. Use `--project` for an explicit destination path. `--replace-project` removes an existing destination before recreating it:
 

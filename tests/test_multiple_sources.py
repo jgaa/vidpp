@@ -5,8 +5,9 @@ import subprocess
 
 import pytest
 
+from vidpp import cli
 from vidpp.cli import _prepare_project_destination, parser
-from vidpp.core import _validate_matching_sources, create_project, project_data
+from vidpp.core import _validate_matching_sources, create_project, project_data, project_hook, save_project_hook
 from vidpp.errors import VidPPError
 
 
@@ -42,6 +43,90 @@ def test_cli_rejects_project_name_paths():
 def test_render_cli_accepts_no_edit():
     args = parser().parse_args(["render", "demo.vidpp", "--no-edit"])
     assert args.no_edit is True
+
+
+def test_project_hook_roundtrip(tmp_path):
+    source = tmp_path / "source.mp4"
+    source.touch()
+    project = tmp_path / "demo.vidpp"
+    project.mkdir()
+    (project / "project.json").write_text(json.dumps({"version": 1, "source_path": str(source), "source": {}}))
+
+    assert project_hook(project) is None
+    save_project_hook(project, "Saved hook")
+    assert project_hook(project) == "Saved hook"
+    assert json.loads((project / "project.json").read_text())["hook"] == "Saved hook"
+
+
+def test_project_rejects_non_string_hook(tmp_path):
+    source = tmp_path / "source.mp4"
+    source.touch()
+    project = tmp_path / "demo.vidpp"
+    project.mkdir()
+    (project / "project.json").write_text(json.dumps({
+        "version": 1,
+        "source_path": str(source),
+        "source": {},
+        "hook": ["not", "text"],
+    }))
+    with pytest.raises(VidPPError, match="hook must be a string"):
+        project_data(project)
+
+
+def test_render_uses_and_updates_saved_project_hook(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.touch()
+    project = tmp_path / "demo.vidpp"
+    project.mkdir()
+    (project / "project.json").write_text(json.dumps({
+        "version": 1,
+        "source_path": str(source),
+        "source": {"width": 1080, "height": 1920},
+        "hook": "Saved hook",
+    }))
+    rendered = []
+    monkeypatch.setattr(cli, "refresh_source_metadata", lambda unused: {"width": 1080, "height": 1920})
+    monkeypatch.setattr(cli, "render", lambda unused_project, template, **unused: rendered.append(template) or project / "output/final.mp4")
+
+    assert cli.main(["render", str(project)]) == 0
+    assert rendered[-1].hook_text == "Saved hook"
+
+    assert cli.main(["render", str(project), "--hook", "Replacement hook"]) == 0
+    assert rendered[-1].hook_text == "Replacement hook"
+    assert project_hook(project) == "Replacement hook"
+
+    assert cli.main(["render", str(project), "--hook", ""]) == 0
+    assert rendered[-1].hook_text == ""
+    assert project_hook(project) == ""
+
+
+def test_process_saves_hook_in_new_project(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.touch()
+    project = tmp_path / "demo.vidpp"
+    rendered = []
+
+    def fake_create(unused_sources, destination):
+        destination.mkdir()
+        for name in ("assets", "cache", "previews", "output"):
+            (destination / name).mkdir()
+        metadata = {
+            "version": 1,
+            "source_path": str(source),
+            "source": {"width": 1080, "height": 1920, "duration": 1.0},
+        }
+        (destination / "project.json").write_text(json.dumps(metadata))
+        return metadata
+
+    monkeypatch.setattr(cli, "create_project", fake_create)
+    monkeypatch.setattr(cli, "transcribe", lambda unused: None)
+    monkeypatch.setattr(cli, "analyze", lambda unused_project, unused_template: None)
+    monkeypatch.setattr(cli, "plan", lambda unused_project, unused_template: [])
+    monkeypatch.setattr(cli, "render", lambda unused_project, template, **unused: rendered.append(template) or project / "output/final.mp4")
+
+    assert cli.main(["process", str(source), "--project", str(project), "--hook", "Persistent hook"]) == 0
+    assert rendered[-1].hook_text == "Persistent hook"
+    assert project_hook(project) == "Persistent hook"
 
 
 def test_root_help_lists_command_options():

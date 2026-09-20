@@ -152,6 +152,22 @@ project/
     └── final.mp4
 ```
 
+`project.json` stores the project-specific hook as an optional top-level string:
+
+```json
+{
+  "version": 1,
+  "source_path": "/absolute/path/to/source.mp4",
+  "hook": "Why privacy matters"
+}
+```
+
+Supplying `--hook` while processing or operating on a project updates this
+field. Render and preview use the saved value when `--hook` is omitted. An
+explicit CLI hook has highest precedence, followed by the saved project hook,
+then `hook.text` from the visual template. An explicit empty string clears the
+saved hook and disables it.
+
 Avoid unnecessary copies of large video files.
 
 If practical, allow the project to reference the original source file rather than copying it.

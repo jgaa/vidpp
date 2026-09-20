@@ -7,7 +7,7 @@ import sys
 import shutil
 import tempfile
 
-from .core import analyze, create_project, plan, refresh_source_metadata, save_transcript, transcribe
+from .core import analyze, create_project, plan, project_hook, refresh_source_metadata, save_project_hook, save_transcript, transcribe
 from .errors import VidPPError
 from .render import render
 from .template import load_template
@@ -64,6 +64,19 @@ def _prepare_project_destination(project: Path, sources: list[Path], replace: bo
     shutil.rmtree(target)
 
 
+def _hook_override(project: Path, command_hook: str | None) -> str | None:
+    if command_hook is not None:
+        save_project_hook(project, command_hook)
+        return command_hook
+    return project_hook(project)
+
+
+def _save_effective_hook(project: Path, hook: str, override: str | None) -> None:
+    # A template hook becomes project-specific only when no hook has already been saved.
+    if override is not None or hook:
+        save_project_hook(project, hook)
+
+
 def parser() -> argparse.ArgumentParser:
     app = VidPPArgumentParser(prog="vidpp", description="Local, deterministic social-video post-processing")
     app.add_argument("-v", "--verbose", action="count", default=0)
@@ -113,6 +126,7 @@ def main(argv: list[str] | None = None) -> int:
             metadata = create_project(args.sources, project)
             source = metadata["source"]
             template = load_template(args.template, args.hook, source_width=source["width"], source_height=source["height"], output_format=args.output_format, orientation=args.orientation)
+            _save_effective_hook(project, template.hook_text, args.hook)
             LOG.info("Output format: %dx%d", template.width, template.height)
             if args.project_config: shutil.copyfile(args.project_config, project / "config.yaml")
             if args.transcript:
@@ -136,6 +150,8 @@ def main(argv: list[str] | None = None) -> int:
             enabled = sum(item.enabled and item.type != "review" for item in operations)
             print(f"{len(operations)} proposed edits, {enabled} enabled. Done: {target}"); return 0
         if args.command == "transcribe":
+            if args.hook is not None:
+                save_project_hook(args.project, args.hook)
             if args.transcript:
                 LOG.info("Importing supplied transcript...")
                 save_transcript(args.project, args.transcript)
@@ -144,19 +160,25 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "analyze":
             LOG.info("Analyzing audio...")
             metadata = refresh_source_metadata(args.project)
-            template = load_template(args.template, args.hook, source_width=metadata["width"], source_height=metadata["height"])
+            hook = _hook_override(args.project, args.hook)
+            template = load_template(args.template, hook, source_width=metadata["width"], source_height=metadata["height"])
+            _save_effective_hook(args.project, template.hook_text, hook)
             analyze(args.project, template)
         elif args.command == "plan":
             LOG.info("Planning edits...")
             metadata = refresh_source_metadata(args.project)
-            template = load_template(args.template, args.hook, source_width=metadata["width"], source_height=metadata["height"])
+            hook = _hook_override(args.project, args.hook)
+            template = load_template(args.template, hook, source_width=metadata["width"], source_height=metadata["height"])
+            _save_effective_hook(args.project, template.hook_text, hook)
             operations = plan(args.project, template)
             enabled = sum(item.enabled and item.type != "review" for item in operations)
             print(f"{len(operations)} proposed edits, {enabled} enabled; review {args.project / 'edit.json'}.")
         else:
             LOG.info("Rendering %s...", "preview" if args.command == "preview" else "final video")
             metadata = refresh_source_metadata(args.project)
-            template = load_template(args.template, args.hook, source_width=metadata["width"], source_height=metadata["height"], output_format=args.output_format, orientation=args.orientation)
+            hook = _hook_override(args.project, args.hook)
+            template = load_template(args.template, hook, source_width=metadata["width"], source_height=metadata["height"], output_format=args.output_format, orientation=args.orientation)
+            _save_effective_hook(args.project, template.hook_text, hook)
             LOG.info("Output format: %dx%d", template.width, template.height)
             print(f"Done: {render(args.project, template, preview=args.command == 'preview', apply_edits=not args.no_edit)}")
         return 0

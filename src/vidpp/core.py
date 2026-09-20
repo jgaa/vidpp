@@ -147,6 +147,8 @@ def project_data(project: Path) -> dict[str, Any]:
     try: raw = json.loads((project / "project.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc: raise VidPPError(f"invalid project: {exc}") from exc
     if not isinstance(raw, dict) or raw.get("version") != 1 or not isinstance(raw.get("source_path"), str): raise VidPPError("invalid project.json")
+    if "hook" in raw and not isinstance(raw["hook"], str):
+        raise VidPPError("invalid project.json: hook must be a string")
     active_source = Path(raw["source_path"])
     if not active_source.is_file():
         sources = raw.get("sources")
@@ -159,6 +161,22 @@ def project_data(project: Path) -> dict[str, Any]:
         else:
             raise VidPPError("project source video no longer exists")
     return raw
+
+
+def project_hook(project: Path) -> str | None:
+    """Return the project's saved hook, distinguishing missing from deliberately empty."""
+    return project_data(project).get("hook")
+
+
+def save_project_hook(project: Path, hook: str) -> None:
+    if not isinstance(hook, str):
+        raise VidPPError("project hook must be a string")
+    data = project_data(project)
+    if data.get("hook") == hook and "hook" in data:
+        return
+    data["hook"] = hook
+    write_json(project / "project.json", data)
+    LOG.debug("Saved project hook in %s: %r", project / "project.json", hook)
 
 
 def refresh_source_metadata(project: Path) -> dict[str, Any]:
