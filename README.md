@@ -1,2 +1,47 @@
-# ppvideo
-Simple post-processing of video clips for social media production
+# VidPP
+
+VidPP is a local video post-processing tool for turning simple recordings into videos ready for social media.
+
+I want to be able to record a video on my phone or a camera without spending a lot of time trying to make every take perfect. VidPP should take care of the boring post-processing: remove false starts, unnecessary repetitions and long unplanned pauses, clean up the presentation, generate subtitles, and render the result using a consistent visual style.
+
+For simple videos, I should only have to provide the source video and, optionally, a template describing how the result should look. The template can define things like a background or frame around the video, subtitle font, size and color, and a PNG or SVG bubble for displaying the hook text. The same template should be reusable across many productions so that the videos have a consistent appearance without having to manually recreate the layout every time.
+
+**Privacy and local processing are important goals of VidPP.** Source videos may contain material that I do not want to upload to third-party services just to edit them. Video, audio, transcription, analysis, AI-assisted editing and rendering should therefore be performed locally whenever possible. The normal workflow should not require sending the source material, transcript or extracted frames to a cloud service. Local models should be sufficient for the routine AI tasks, while the architecture should not prevent explicitly using a remote model when I choose to do so.
+
+VidPP uses existing tools such as FFmpeg for the actual media processing. Where editorial decisions are needed, a small local language model can analyze the transcript and suggest what should be removed or shortened. The model decides *what* to edit; deterministic code decides *how* to perform the edit. The original recording is never modified.
+
+The initial version of VidPP will be a CLI application. The internal project and edit formats should be clean and independent of the CLI so that a proper GUI can be added later. The goal is not to build another general-purpose video editor. The goal is to automate as much as possible of the repetitive work between recording a simple video and having something ready to publish.
+
+## MVP usage
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
+vidpp process source.mp4 --transcript transcript.json --template template.yaml --hook "Why privacy matters"
+```
+
+All Python packages are installed in `.venv`; the machine's shared Python environment is not changed. On Debian/Ubuntu, install the matching `python3-venv` package first if `python3 -m venv` reports that `ensurepip` is unavailable. To run tests, use `python -m pip install pytest` and then `python -m pytest` while the environment is active.
+
+`transcript.json` contains timestamped segments, for example `{"segments":[{"start":0.0,"end":2.2,"text":"A short spoken sentence."}]}`. VidPP creates `source.vidpp/` by default, references rather than copies the source, retains the transcript, analysis and semantic edit plan, and writes `output/final.mp4`. Individual stages are `import`, `transcribe`, `analyze`, `plan`, `preview`, and `render`.
+
+The renderer needs local `ffmpeg`/`ffprobe` with libass and an installed subtitle font. It renders H.264/AAC MP4, edits detected long silences conservatively, composes an optional background and hook image, burns captions, and normalizes audio.
+
+### Local transcription and editorial model
+
+For local use, VidPP transcribes with the local `whisper` executable when no `--transcript` is supplied. Install it only inside the active virtual environment:
+
+```bash
+python -m pip install openai-whisper
+```
+
+FFmpeg is also required. Select a local Whisper model with `VIDPP_WHISPER_MODEL` (defaults to `base`) and optionally set `VIDPP_WHISPER_LANGUAGE`, for example `export VIDPP_WHISPER_MODEL=small`. If Whisper is unavailable, VidPP prints these instructions and exits without rendering. Alternatives are to pass a timestamped `--transcript`, or set `VIDPP_TRANSCRIBE_COMMAND` to a local executable that accepts the source-video path as its final argument and writes compatible transcript JSON to stdout. VidPP invokes that command as an argument array, never through a shell.
+
+Optional editorial analysis uses a local OpenAI-compatible server only when both variables are set:
+
+```bash
+export VIDPP_LLM_BASE_URL=http://model-machine:8000/v1
+export VIDPP_LLM_MODEL=Qwen3-4B-Instruct
+```
+
+Start the chosen model runtime on the model machine according to its documentation and bind it only to a trusted local network interface. The model receives structured transcript and silence observations and can only return schema-validated semantic operations; it cannot run commands or construct FFmpeg filters. Without these variables VidPP still produces a deterministic pause-edit plan.

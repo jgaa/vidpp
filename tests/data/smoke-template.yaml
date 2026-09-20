@@ -1,0 +1,14 @@
+version: 1
+output:
+  width: 320
+  height: 480
+video:
+  width: 320
+  height: 480
+  fit: contain
+subtitles:
+  font: "DejaVu Sans"
+  font_size: 22
+  bottom_margin: 30
+audio:
+  normalize: true

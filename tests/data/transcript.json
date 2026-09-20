@@ -1,0 +1,6 @@
+{
+  "segments": [
+    {"start": 0.0, "end": 1.0, "text": "This is a short local integration test."},
+    {"start": 1.0, "end": 2.0, "text": "It verifies burned in captions."}
+  ]
+}
