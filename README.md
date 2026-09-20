@@ -44,4 +44,41 @@ export VIDPP_LLM_BASE_URL=http://model-machine:8000/v1
 export VIDPP_LLM_MODEL=Qwen3-4B-Instruct
 ```
 
-Start the chosen model runtime on the model machine according to its documentation and bind it only to a trusted local network interface. The model receives structured transcript and silence observations and can only return schema-validated semantic operations; it cannot run commands or construct FFmpeg filters. Without these variables VidPP still produces a deterministic pause-edit plan.
+### llama.cpp server on an AMD Vulkan system
+
+Use a separate, full llama.cpp checkout for the server rather than reusing the copy nested in another application's CMake build. This keeps its CMake cache, targets, and shared-library options independent of a Whisper-integrated application. On Debian/Ubuntu, the build prerequisites are:
+
+```bash
+sudo apt-get install build-essential cmake git libvulkan-dev glslc spirv-headers vulkan-tools
+vulkaninfo
+git clone https://github.com/ggml-org/llama.cpp.git
+cd llama.cpp
+git submodule update --init --recursive
+cmake -S . -B build \
+  -DGGML_VULKAN=ON \
+  -DBUILD_SHARED_LIBS=ON \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j "$(nproc)"
+```
+
+This is a full Git history checkout and builds the complete project, including the shared libraries and `build/bin/llama-server`. `vulkaninfo` should identify the AMD GPU through the installed Vulkan driver before building. Start the server with a GGUF instruct model whose metadata contains the appropriate chat template:
+
+```bash
+./build/bin/llama-server \
+  --model /absolute/path/to/Qwen3-4B-Instruct-Q4_K_M.gguf \
+  --alias vidpp-editor \
+  --host 127.0.0.1 --port 8080 \
+  --n-gpu-layers all \
+  --ctx-size 16384 --n-predict 1024
+```
+
+`--n-gpu-layers all` asks llama.cpp to place all layers that fit in VRAM; reduce it to a number if the model does not fit. Confirm the startup log identifies `ggml_vulkan` and the AMD device. Point VidPP at the server alias:
+
+```bash
+export VIDPP_LLM_BASE_URL=http://127.0.0.1:8080/v1
+export VIDPP_LLM_MODEL=vidpp-editor
+```
+
+For a model server on another trusted machine, replace `127.0.0.1` in `--host` and `VIDPP_LLM_BASE_URL` with its private-network address, set `--api-key` on `llama-server`, and export the same value as `VIDPP_LLM_API_KEY` for VidPP. Do not expose the server directly to the public internet; use a firewall and reverse proxy if that is unavoidable.
+
+The model receives structured transcript and silence observations and can only return schema-validated semantic operations; it cannot run commands or construct FFmpeg filters. Without these variables VidPP still produces a deterministic pause-edit plan.
