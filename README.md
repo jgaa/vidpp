@@ -21,6 +21,19 @@ python -m pip install -e .
 vidpp process source.mp4 --transcript transcript.json --template template.yaml --hook "Why privacy matters"
 ```
 
+For a source that is already edited, keep the full timeline and run only transcription, subtitles, template processing, audio processing, and rendering:
+
+```bash
+vidpp process source.mp4 --no-edit
+```
+
+`--no-edit` skips audio edit analysis and editorial-model planning during `process`. It is also accepted by `render` and `preview`, where it explicitly ignores any stored `edit.json` operations:
+
+```bash
+vidpp render project.vidpp --no-edit
+vidpp preview project.vidpp --no-edit
+```
+
 All Python packages are installed in `.venv`; the machine's shared Python environment is not changed. On Debian/Ubuntu, install the matching `python3-venv` package first if `python3 -m venv` reports that `ensurepip` is unavailable. To run tests, use `python -m pip install pytest` and then `python -m pytest` while the environment is active.
 
 `transcript.json` contains timestamped segments, for example `{"segments":[{"start":0.0,"end":2.2,"text":"A short spoken sentence."}]}`. VidPP creates `source.vidpp/` by default, references rather than copies the source, retains the transcript, analysis and semantic edit plan, and writes `output/final.mp4`. Individual stages are `import`, `transcribe`, `analyze`, `plan`, `preview`, and `render`.

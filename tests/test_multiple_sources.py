@@ -24,10 +24,11 @@ def test_cli_accepts_ordered_sources():
 
 
 def test_cli_project_name_adds_suffix_and_accepts_replace():
-    args = parser().parse_args(["process", "source.mp4", "--project-name", "demo", "--replace-project"])
+    args = parser().parse_args(["process", "source.mp4", "--project-name", "demo", "--replace-project", "--no-edit"])
     assert args.project_name == Path("demo.vidpp")
     assert args.project is None
     assert args.replace_project is True
+    assert args.no_edit is True
     imported = parser().parse_args(["import", "source.mp4", "demo.vidpp", "--replace-project"])
     assert imported.project == Path("demo.vidpp")
     assert imported.replace_project is True
@@ -36,6 +37,18 @@ def test_cli_project_name_adds_suffix_and_accepts_replace():
 def test_cli_rejects_project_name_paths():
     with pytest.raises(SystemExit):
         parser().parse_args(["process", "source.mp4", "--project-name", "nested/demo"])
+
+
+def test_render_cli_accepts_no_edit():
+    args = parser().parse_args(["render", "demo.vidpp", "--no-edit"])
+    assert args.no_edit is True
+
+
+def test_root_help_lists_command_options():
+    help_text = parser().format_help()
+    for option in ("--no-edit", "--project-name", "--replace-project", "--transcript", "--template", "--format"):
+        assert option in help_text
+    assert "command options:" in help_text
 
 
 def test_replace_project_removes_only_exact_destination(tmp_path):

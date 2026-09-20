@@ -115,10 +115,13 @@ def build_filter(source_duration: float, operations: list[EditOperation], templa
     return ";".join(parts)
 
 
-def render(project: Path, template: Template, *, preview: bool = False) -> Path:
+def render(project: Path, template: Template, *, preview: bool = False, apply_edits: bool = True) -> Path:
     data = project_data(project)
     transcript = load_transcript(project / "transcript.json")
-    operations = load_edit_plan(project / "edit.json", float(data["source"]["duration"])) if (project / "edit.json").exists() else []
+    stored_operations = load_edit_plan(project / "edit.json", float(data["source"]["duration"])) if (project / "edit.json").exists() else []
+    operations = stored_operations if apply_edits else []
+    if not apply_edits:
+        LOG.info("Editing disabled; ignoring %d stored edit operations and keeping the complete timeline.", len(stored_operations))
     ass_path = project / "cache" / "captions.ass"
     target = project / ("previews/preview.mp4" if preview else "output/final.mp4")
     ranges = timeline_ranges(operations, float(data["source"]["duration"]))

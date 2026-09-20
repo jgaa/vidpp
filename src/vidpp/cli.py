@@ -15,6 +15,23 @@ from .template import load_template
 LOG = logging.getLogger(__name__)
 
 
+class VidPPArgumentParser(argparse.ArgumentParser):
+    """Show command-specific options in the root help, not only command names."""
+
+    def format_help(self) -> str:
+        help_text = super().format_help()
+        subparsers = next(
+            (action for action in self._actions if isinstance(action, argparse._SubParsersAction)),
+            None,
+        )
+        if subparsers is None:
+            return help_text
+        sections = [help_text.rstrip(), "", "command options:"]
+        for name, command_parser in subparsers.choices.items():
+            sections.extend(["", f"  {name}", command_parser.format_help().rstrip()])
+        return "\n".join(sections) + "\n"
+
+
 def _project(value: str) -> Path: return Path(value).resolve()
 
 
@@ -48,7 +65,7 @@ def _prepare_project_destination(project: Path, sources: list[Path], replace: bo
 
 
 def parser() -> argparse.ArgumentParser:
-    app = argparse.ArgumentParser(prog="vidpp", description="Local, deterministic social-video post-processing")
+    app = VidPPArgumentParser(prog="vidpp", description="Local, deterministic social-video post-processing")
     app.add_argument("-v", "--verbose", action="count", default=0)
     commands = app.add_subparsers(dest="command", required=True)
     import_cmd = commands.add_parser("import", help="create a project without copying source media")
@@ -61,12 +78,14 @@ def parser() -> argparse.ArgumentParser:
         if name in {"render", "preview"}:
             cmd.add_argument("--format", dest="output_format", metavar="p720")
             cmd.add_argument("--orientation", choices=("auto", "portrait", "landscape"))
+            cmd.add_argument("--no-edit", action="store_true", help="ignore edit.json and keep the complete timeline")
     process = commands.add_parser("process", help="run the complete pipeline")
     process.add_argument("sources", type=Path, nargs="+")
     destination = process.add_mutually_exclusive_group()
     destination.add_argument("--project", type=Path, help="project destination path")
     destination.add_argument("--project-name", type=_project_name, help="project directory name; .vidpp is appended")
     process.add_argument("--replace-project", action="store_true", help="remove and recreate the destination project")
+    process.add_argument("--no-edit", action="store_true", help="skip edit analysis/planning and keep the complete timeline")
     process.add_argument("--template", type=Path); process.add_argument("--hook"); process.add_argument("--transcript", type=Path)
     process.add_argument("--project-config", type=Path)
     process.add_argument("--format", dest="output_format", metavar="p720")
@@ -101,12 +120,19 @@ def main(argv: list[str] | None = None) -> int:
                 save_transcript(project, args.transcript)
             else:
                 transcribe(project)
-            LOG.info("Analyzing audio...")
-            analyze(project, template)
-            LOG.info("Planning edits...")
-            operations = plan(project, template)
+            operations = []
+            if args.no_edit:
+                LOG.info("Editing disabled; skipping audio edit analysis and editorial planning.")
+            else:
+                LOG.info("Analyzing audio...")
+                analyze(project, template)
+                LOG.info("Planning edits...")
+                operations = plan(project, template)
             LOG.info("Rendering final video...")
-            target = render(project, template)
+            target = render(project, template, apply_edits=not args.no_edit)
+            if args.no_edit:
+                print(f"Editing disabled. Done: {target}")
+                return 0
             enabled = sum(item.enabled and item.type != "review" for item in operations)
             print(f"{len(operations)} proposed edits, {enabled} enabled. Done: {target}"); return 0
         if args.command == "transcribe":
@@ -132,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
             metadata = refresh_source_metadata(args.project)
             template = load_template(args.template, args.hook, source_width=metadata["width"], source_height=metadata["height"], output_format=args.output_format, orientation=args.orientation)
             LOG.info("Output format: %dx%d", template.width, template.height)
-            print(f"Done: {render(args.project, template, preview=args.command == 'preview')}")
+            print(f"Done: {render(args.project, template, preview=args.command == 'preview', apply_edits=not args.no_edit)}")
         return 0
     except VidPPError as exc:
         logging.error("%s", exc); return 2

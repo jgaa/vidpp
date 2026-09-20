@@ -101,3 +101,8 @@ def test_ffmpeg_word_cut_render(tmp_path):
     probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(target)], capture_output=True, text=True, check=True)
     assert float(json.loads(probe.stdout)["format"]["duration"]) == pytest.approx(1.5, abs=.15)
     assert "remove" not in (project / "cache/captions.ass").read_text()
+
+    unedited = render(project, Template(width=320, height=480, video_width=320, video_height=480, subtitle_font="DejaVu Sans", subtitle_font_size=22, subtitle_bottom_margin=30), preview=True, apply_edits=False)
+    unedited_probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(unedited)], capture_output=True, text=True, check=True)
+    assert float(json.loads(unedited_probe.stdout)["format"]["duration"]) == pytest.approx(2, abs=.15)
+    assert "remove" in (project / "cache/captions.ass").read_text()
