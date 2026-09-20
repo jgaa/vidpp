@@ -38,6 +38,31 @@ def test_whisper_fallback_saves_its_json(tmp_path, monkeypatch):
     assert (tmp_path / "transcript.json").is_file()
 
 
+def test_whisper_segment_envelope_is_aligned_to_word_timestamps(tmp_path, monkeypatch):
+    _project(tmp_path)
+    monkeypatch.delenv("VIDPP_TRANSCRIBE_COMMAND", raising=False)
+    monkeypatch.setattr(core.shutil, "which", lambda _: "/venv/bin/whisper")
+
+    def fake_run(command, **kwargs):
+        (tmp_path / "cache/source.json").write_text(json.dumps({"segments": [{
+            "start": 0.1,
+            "end": 1.4,
+            "text": "hello world",
+            "words": [
+                {"word": "hello", "start": 0.08, "end": 0.5},
+                {"word": "world", "start": 0.6, "end": 1.44},
+            ],
+        }]}))
+
+    monkeypatch.setattr(core, "run", fake_run)
+    core.transcribe(tmp_path)
+
+    raw = json.loads((tmp_path / "cache/source.json").read_text())
+    normalized = json.loads((tmp_path / "transcript.json").read_text())
+    assert (raw["segments"][0]["start"], raw["segments"][0]["end"]) == (0.1, 1.4)
+    assert (normalized["segments"][0]["start"], normalized["segments"][0]["end"]) == (0.08, 1.44)
+
+
 def test_deduplicated_phrases_are_passed_as_one_argument(tmp_path, monkeypatch):
     _project(tmp_path)
     monkeypatch.delenv("VIDPP_TRANSCRIBE_COMMAND", raising=False)

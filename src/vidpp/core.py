@@ -17,7 +17,14 @@ import urllib.request
 
 from .errors import VidPPError
 from .config import transcription_config
-from .models import EditOperation, edit_plan_json, load_edit_plan, load_transcript, write_json
+from .models import (
+    EditOperation,
+    TranscriptSegment,
+    edit_plan_json,
+    load_edit_plan,
+    load_transcript,
+    write_json,
+)
 from .template import Template
 
 LOG = logging.getLogger(__name__)
@@ -197,6 +204,52 @@ def save_transcript(project: Path, transcript: Path) -> None:
     write_json(project / "transcript.json", payload)
 
 
+def _whisper_payload(path: Path) -> dict[str, Any]:
+    """Load Whisper JSON and make segment envelopes agree with its word timeline.
+
+    Whisper occasionally returns a segment whose first or last word extends beyond
+    the segment timestamp. Word timestamps are the authoritative boundaries for
+    editing and captions, while the unmodified producer output remains in cache.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise VidPPError(f"invalid Whisper transcript {path}: {exc}") from exc
+    segments = payload.get("segments") if isinstance(payload, dict) else None
+    if not isinstance(segments, list):
+        raise VidPPError("Whisper transcript must contain a segments array")
+    adjusted = 0
+    for index, segment in enumerate(segments):
+        if not isinstance(segment, dict) or not isinstance(segment.get("words", []), list):
+            # The normal transcript validator supplies the detailed error.
+            continue
+        words = segment.get("words", [])
+        if not words:
+            continue
+        try:
+            word_start = min(float(word["start"]) for word in words)
+            word_end = max(float(word["end"]) for word in words)
+            segment_start = float(segment["start"])
+            segment_end = float(segment["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        new_start = min(segment_start, word_start)
+        new_end = max(segment_end, word_end)
+        if new_start != segment_start or new_end != segment_end:
+            LOG.debug(
+                "Adjusted Whisper segment %d envelope %.3f-%.3f to %.3f-%.3f for word timestamps",
+                index, segment_start, segment_end, new_start, new_end,
+            )
+            segment["start"], segment["end"] = new_start, new_end
+            adjusted += 1
+    # Validate after normalization. Invalid word ranges, ordering, and text still fail.
+    for segment in segments:
+        TranscriptSegment.from_dict(segment)
+    if adjusted:
+        LOG.info("Aligned %d Whisper segment boundary/boundaries with word timestamps.", adjusted)
+    return payload
+
+
 def _recovery_intervals(transcript: list[Any], duration: float) -> list[tuple[float, float]]:
     words = [word for segment in transcript for word in segment.words]
     if not words:
@@ -374,7 +427,8 @@ def transcribe(project: Path) -> None:
         whisper_json = cache / (Path(source).stem + ".json")
         if not whisper_json.is_file():
             raise VidPPError("Whisper completed without producing its expected JSON transcript")
-        save_transcript(project, whisper_json)
+        primary_payload = _whisper_payload(whisper_json)
+        write_json(target, primary_payload)
         primary = load_transcript(target)
         duration = float(project_data(project)["source"]["duration"])
         intervals = _recovery_intervals(primary, duration)
@@ -395,11 +449,11 @@ def transcribe(project: Path) -> None:
             recovery_json = recovery_cache / (Path(source).stem + ".json")
             if not recovery_json.is_file():
                 raise VidPPError("Whisper recovery pass completed without producing its expected JSON transcript")
-            recovery = load_transcript(recovery_json)
-            primary_raw = json.loads(whisper_json.read_text(encoding="utf-8"))
+            recovery_payload = _whisper_payload(recovery_json)
+            recovery = [TranscriptSegment.from_dict(item) for item in recovery_payload["segments"]]
             reconciled, recovered_count = _reconcile_transcripts(primary, recovery, intervals)
-            if primary_raw.get("language"):
-                reconciled["language"] = primary_raw["language"]
+            if primary_payload.get("language"):
+                reconciled["language"] = primary_payload["language"]
             write_json(target, reconciled)
             write_json(cache / "transcription-recovery.json", {
                 "intervals": [{"start": start, "end": end} for start, end in intervals],
