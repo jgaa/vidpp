@@ -63,6 +63,36 @@ def test_whisper_segment_envelope_is_aligned_to_word_timestamps(tmp_path, monkey
     assert (normalized["segments"][0]["start"], normalized["segments"][0]["end"]) == (0.08, 1.44)
 
 
+def test_whisper_discards_zero_duration_segments_without_usable_timing(tmp_path, monkeypatch, caplog):
+    _project(tmp_path)
+    monkeypatch.delenv("VIDPP_TRANSCRIBE_COMMAND", raising=False)
+    monkeypatch.setattr(core.shutil, "which", lambda _: "/venv/bin/whisper")
+    raw = {"text": "So let me open this up. Bye bye. Bye bye. Thank you.", "segments": [
+        {"start": 0.1, "end": 0.3, "text": "So let me open this up."},
+        {"start": 0.4, "end": 0.4, "text": "Bye bye."},
+        {"start": 0.4, "end": 0.4, "text": "Bye bye.", "words": [
+            {"word": "Bye", "start": 0.4, "end": 0.4},
+        ]},
+        {"start": 0.4, "end": 0.4, "text": "Thank you.", "words": [
+            {"word": "Thank", "start": 0.4, "end": 0.45},
+            {"word": "you.", "start": 0.45, "end": 0.48},
+        ]},
+    ]}
+
+    def fake_run(command, **kwargs):
+        (tmp_path / "cache/source.json").write_text(json.dumps(raw))
+
+    monkeypatch.setattr(core, "run", fake_run)
+    core.transcribe(tmp_path)
+
+    normalized = json.loads((tmp_path / "transcript.json").read_text())
+    assert json.loads((tmp_path / "cache/source.json").read_text()) == raw
+    assert [segment["text"] for segment in normalized["segments"]] == ["So let me open this up.", "Thank you."]
+    assert normalized["segments"][1]["end"] == 0.48
+    assert normalized["text"] == "So let me open this up. Thank you."
+    assert "Discarded 2 zero-duration Whisper segment(s)" in caplog.text
+
+
 def test_deduplicated_phrases_are_passed_as_one_argument(tmp_path, monkeypatch):
     _project(tmp_path)
     monkeypatch.delenv("VIDPP_TRANSCRIBE_COMMAND", raising=False)

@@ -7,6 +7,7 @@ from typing import Any
 import json
 import importlib.util
 import logging
+import math
 import os
 import re
 import shlex
@@ -208,8 +209,9 @@ def _whisper_payload(path: Path) -> dict[str, Any]:
     """Load Whisper JSON and make segment envelopes agree with its word timeline.
 
     Whisper occasionally returns a segment whose first or last word extends beyond
-    the segment timestamp. Word timestamps are the authoritative boundaries for
-    editing and captions, while the unmodified producer output remains in cache.
+    the segment timestamp, or a segment with no duration at all. Word timestamps
+    are the authoritative boundaries for editing and captions. Segments that still
+    have no duration are discarded; the unmodified producer output remains in cache.
     """
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -219,19 +221,21 @@ def _whisper_payload(path: Path) -> dict[str, Any]:
     if not isinstance(segments, list):
         raise VidPPError("Whisper transcript must contain a segments array")
     adjusted = 0
+    discarded = 0
+    usable_segments = []
     for index, segment in enumerate(segments):
         if not isinstance(segment, dict) or not isinstance(segment.get("words", []), list):
             # The normal transcript validator supplies the detailed error.
+            usable_segments.append(segment)
             continue
         words = segment.get("words", [])
-        if not words:
-            continue
         try:
-            word_start = min(float(word["start"]) for word in words)
-            word_end = max(float(word["end"]) for word in words)
             segment_start = float(segment["start"])
             segment_end = float(segment["end"])
+            word_start = min(float(word["start"]) for word in words) if words else segment_start
+            word_end = max(float(word["end"]) for word in words) if words else segment_end
         except (KeyError, TypeError, ValueError):
+            usable_segments.append(segment)
             continue
         new_start = min(segment_start, word_start)
         new_end = max(segment_end, word_end)
@@ -242,8 +246,20 @@ def _whisper_payload(path: Path) -> dict[str, Any]:
             )
             segment["start"], segment["end"] = new_start, new_end
             adjusted += 1
+        if new_start == new_end and math.isfinite(new_start) and new_start >= 0:
+            LOG.debug("Discarding zero-duration Whisper segment %d at %.3f: %r", index, new_start, segment.get("text"))
+            discarded += 1
+            continue
+        usable_segments.append(segment)
+    if discarded:
+        LOG.warning("Discarded %d zero-duration Whisper segment(s); see cached raw transcript for details.", discarded)
+        payload["text"] = " ".join(
+            segment["text"].strip() for segment in usable_segments
+            if isinstance(segment, dict) and isinstance(segment.get("text"), str)
+        )
+    payload["segments"] = usable_segments
     # Validate after normalization. Invalid word ranges, ordering, and text still fail.
-    for segment in segments:
+    for segment in usable_segments:
         TranscriptSegment.from_dict(segment)
     if adjusted:
         LOG.info("Aligned %d Whisper segment boundary/boundaries with word timestamps.", adjusted)
