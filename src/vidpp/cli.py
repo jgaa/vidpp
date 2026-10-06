@@ -11,7 +11,7 @@ import shutil
 import tempfile
 
 from .core import analyze, create_project, plan, project_hook, refresh_source_metadata, save_project_hook, save_transcript, transcribe
-from .config import AppConfig, app_config
+from .config import AppConfig, app_config, apply_project_config, read_project_config
 from .errors import VidPPError
 from .render import render
 from .template import load_template
@@ -20,20 +20,20 @@ LOG = logging.getLogger(__name__)
 
 
 class VidPPArgumentParser(argparse.ArgumentParser):
-    """Show command-specific options in the root help, not only command names."""
+    """Keep the overview concise and accept the literal 'help' command argument."""
 
-    def format_help(self) -> str:
-        help_text = super().format_help()
-        subparsers = next(
-            (action for action in self._actions if isinstance(action, argparse._SubParsersAction)),
-            None,
-        )
-        if subparsers is None:
-            return help_text
-        sections = [help_text.rstrip(), "", "command options:"]
-        for name, command_parser in subparsers.choices.items():
-            sections.extend(["", f"  {name}", command_parser.format_help().rstrip()])
-        return "\n".join(sections) + "\n"
+    def parse_args(self, args=None, namespace=None):
+        values = list(sys.argv[1:] if args is None else args)
+        if not values:
+            self.print_help()
+            self.exit()
+        return super().parse_args(values, namespace)
+
+    def parse_known_args(self, args=None, namespace=None):
+        values = list(sys.argv[1:] if args is None else args)
+        if values == ["help"]:
+            values = ["--help"]
+        return super().parse_known_args(values, namespace)
 
 
 def _project(value: str) -> Path: return Path(value).expanduser()
@@ -70,7 +70,12 @@ def _list_projects(projects_dir: Path) -> list[Path]:
         return []
     if not projects_dir.is_dir():
         raise VidPPError(f"projects_dir is not a directory: {projects_dir}")
-    projects = [item for item in projects_dir.iterdir() if item.is_dir() and (item / "project.json").is_file()]
+    projects = []
+    for item in projects_dir.iterdir():
+        if item.is_dir() and ((item / "project.json").is_file() or (item / "config.yaml").is_file()):
+            values = read_project_config(item)
+            if isinstance(values.get("source_path"), str):
+                projects.append(item)
     return sorted(projects, key=lambda item: item.name.casefold())
 
 
@@ -91,8 +96,10 @@ def _prepare_project_destination(project: Path, sources: list[Path], replace: bo
         if (absolute_source == target or target in absolute_source.parents or
                 resolved_source == target or target in resolved_source.parents):
             raise VidPPError(f"refusing to replace project because it contains source media: {source}")
-    if target.suffix != ".vidpp" and not (target / "project.json").is_file():
-        raise VidPPError(f"refusing to replace directory that is not recognizably a VidPP project: {target}")
+    if target.suffix != ".vidpp":
+        has_config = (target / "project.json").is_file() or (target / "config.yaml").is_file()
+        if not has_config or not isinstance(read_project_config(target).get("source_path"), str):
+            raise VidPPError(f"refusing to replace directory that is not recognizably a VidPP project: {target}")
     LOG.warning("Replacing project: removing existing destination %s", target)
     shutil.rmtree(target)
 
@@ -138,26 +145,46 @@ def open_video(path: Path) -> None:
 
 
 def parser() -> argparse.ArgumentParser:
-    app = VidPPArgumentParser(prog="vidpp", description="Local, deterministic social-video post-processing")
-    app.add_argument("-v", "--verbose", action="count", default=0)
-    commands = app.add_subparsers(dest="command", required=True)
-    commands.add_parser("list", help="list projects in the configured projects directory")
-    import_cmd = commands.add_parser("import", help="create a project without copying source media")
-    import_cmd.add_argument("sources", type=Path, nargs="+"); import_cmd.add_argument("project", type=Path)
-    import_cmd.add_argument("--project-config", type=Path)
+    app = VidPPArgumentParser(
+        prog="vidpp", usage="%(prog)s [-h] [-v] <command> ...",
+        description="Process videos locally.", formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='Example: create a project from a video and hook:\n  vidpp process input.mp4 --hook "Why privacy matters"\n\nCommand details: vidpp <command> help (or -h, --help)',
+    )
+    app.add_argument("-v", "--verbose", action="count", default=0, help="enable debug logging before the command")
+    commands = app.add_subparsers(dest="command", required=True, title="commands", metavar="<command>")
+
+    def command(name: str, summary: str, description: str):
+        return commands.add_parser(name, help=summary, description=description,
+                                   epilog=f"Global options: -v, --verbose enable debug logging before the command: vidpp -v {name} ...")
+
+    command("list", "list saved projects", "List projects in the configured projects directory, migrating legacy configurations when needed.")
+    import_cmd = command("import", "create a project from input videos", "Create a project referencing one or more input videos. Multiple inputs are combined in the supplied order.")
+    import_cmd.add_argument("sources", type=Path, nargs="+", help="input video paths, in timeline order")
+    import_cmd.add_argument("project", type=Path, help="project destination; relative paths use the configured projects directory")
+    import_cmd.add_argument("--project-config", type=Path, help="YAML overrides to merge into the new project's config.yaml")
     import_cmd.add_argument("--replace-project", action="store_true", help="remove and recreate the destination project")
-    for name in ("transcribe", "analyze", "plan", "render", "preview"):
-        cmd = commands.add_parser(name); cmd.add_argument("project", type=_project); cmd.add_argument("--template", type=Path); cmd.add_argument("--hook")
-        if name == "transcribe": cmd.add_argument("--transcript", type=Path)
+    stage_help = {
+        "transcribe": ("generate or import a transcript", "Transcribe speech using the configured model, or import an existing timestamped transcript."),
+        "analyze": ("analyze audio and pauses", "Analyze the project's audio for long pauses and save analysis.json."),
+        "plan": ("propose edits for review", "Generate a semantic edit plan and save proposals in edit.json for review before enabling them."),
+        "render": ("render the final video", "Render the final MP4 using the saved transcript, enabled edits, project settings, and optional visual template."),
+        "preview": ("render a fast video preview", "Render a lower-quality preview to the project's previews directory using the current settings and enabled edits."),
+    }
+    for name, descriptions in stage_help.items():
+        cmd = command(name, *descriptions)
+        cmd.add_argument("project", type=_project, help="project name or absolute project directory")
+        cmd.add_argument("--template", type=Path, help="visual/editing template YAML" if name != "transcribe" else "accepted for compatibility; unused during transcription")
+        cmd.add_argument("--hook", help="save the project hook; an empty string clears it")
+        if name == "transcribe": cmd.add_argument("--transcript", type=Path, help="import a timestamped JSON transcript instead of running a model")
         if name in {"render", "preview"}:
-            cmd.add_argument("--format", dest="output_format", metavar="p720")
-            cmd.add_argument("--orientation", choices=("auto", "portrait", "landscape"))
+            cmd.add_argument("--format", dest="output_format", metavar="p720", help="output short-edge resolution, such as p360, p720 or p1080")
+            cmd.add_argument("--orientation", choices=("auto", "portrait", "landscape"), help="output orientation; auto follows the source")
             cmd.add_argument("--no-edit", action="store_true", help="ignore edit.json and keep the complete timeline")
         if name == "render":
             cmd.add_argument("--open", action="store_true", help="open the completed video in the default viewer")
             cmd.add_argument("--output-file", type=Path, help="write the final MP4 to this path")
-    process = commands.add_parser("process", help="run the complete pipeline")
-    process.add_argument("sources", type=Path, nargs="+")
+    process = command("process", "create a project and process its videos", "Create a project, transcribe speech, analyze audio, propose edits, and render the result. Review proposed edits before enabling them.")
+    process.add_argument("sources", type=Path, nargs="+", help="input video paths, in timeline order")
     destination = process.add_mutually_exclusive_group()
     destination.add_argument("--project", type=Path, help="project destination path")
     destination.add_argument("--project-name", type=_project_name, help="project directory name; .vidpp is appended")
@@ -165,10 +192,12 @@ def parser() -> argparse.ArgumentParser:
     process.add_argument("--no-edit", action="store_true", help="skip edit analysis/planning and keep the complete timeline")
     process.add_argument("--open", action="store_true", help="open the completed video in the default viewer")
     process.add_argument("--output-file", type=Path, help="write the final MP4 to this path")
-    process.add_argument("--template", type=Path); process.add_argument("--hook"); process.add_argument("--transcript", type=Path)
-    process.add_argument("--project-config", type=Path)
-    process.add_argument("--format", dest="output_format", metavar="p720")
-    process.add_argument("--orientation", choices=("auto", "portrait", "landscape"))
+    process.add_argument("--template", type=Path, help="visual/editing template YAML")
+    process.add_argument("--hook", help="project hook text; an empty string disables the hook")
+    process.add_argument("--transcript", type=Path, help="import a timestamped JSON transcript instead of running a model")
+    process.add_argument("--project-config", type=Path, help="YAML overrides to merge into the new project's config.yaml")
+    process.add_argument("--format", dest="output_format", metavar="p720", help="output short-edge resolution, such as p360, p720 or p1080")
+    process.add_argument("--orientation", choices=("auto", "portrait", "landscape"), help="output orientation; auto follows the source")
     return app
 
 
@@ -189,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
             LOG.info("Inspecting source and creating project...")
             _prepare_project_destination(args.project, args.sources, args.replace_project)
             create_project(args.sources, args.project)
-            if args.project_config: shutil.copyfile(args.project_config, args.project / "config.yaml")
+            if args.project_config: apply_project_config(args.project, args.project_config)
             print(f"Created project: {args.project}")
             return 0
         if args.command == "process":
@@ -198,11 +227,11 @@ def main(argv: list[str] | None = None) -> int:
             LOG.info("Inspecting source and creating project...")
             _prepare_project_destination(project, args.sources, args.replace_project)
             metadata = create_project(args.sources, project)
+            if args.project_config: apply_project_config(project, args.project_config)
             source = metadata["source"]
-            template = load_template(args.template, args.hook, source_width=source["width"], source_height=source["height"], output_format=args.output_format, orientation=args.orientation)
+            template = load_template(args.template, _hook_override(project, args.hook), source_width=source["width"], source_height=source["height"], output_format=args.output_format, orientation=args.orientation)
             _save_effective_hook(project, template.hook_text, args.hook)
             LOG.info("Output format: %dx%d", template.width, template.height)
-            if args.project_config: shutil.copyfile(args.project_config, project / "config.yaml")
             if args.transcript:
                 LOG.info("Importing supplied transcript...")
                 save_transcript(project, args.transcript)

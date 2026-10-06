@@ -11,7 +11,7 @@ from vidpp.models import EditOperation, TranscriptSegment
 from vidpp.render import build_filter, log_edit_summary, remap_transcript, render, render_hook_bubble, render_target, timeline_ranges, write_ass
 from vidpp.core import create_project
 from vidpp.template import Template
-from vidpp.config import SubtitleConfig, SubtitleArea
+from vidpp.config import SubtitleConfig, SubtitleArea, read_project_config, write_project_config
 from vidpp.captions import caption_font
 
 
@@ -197,12 +197,21 @@ def test_rendered_subtitle_pixels_follow_settings(tmp_path, monkeypatch, scope):
 
     baseline = rendered_bounds()
     settings_path = global_path if scope == "global" else project / "config.yaml"
-    settings_path.write_text("subtitles:\n  relative_y: -0.2\n")
+    settings = {} if scope == "global" else read_project_config(project)
+    settings["subtitles"] = {"relative_y": -.2}
+    if scope == "global":
+        settings_path.write_text("subtitles:\n  relative_y: -0.2\n")
+    else:
+        write_project_config(project, settings)
     moved = rendered_bounds()
     assert moved[0] == baseline[0] and moved[2] == baseline[2]
     assert moved[1] == pytest.approx(baseline[1] - 48, abs=1)
     assert moved[3] == pytest.approx(baseline[3] - 48, abs=1)
-    settings_path.write_text("subtitles:\n  area: {top: 40, left: 30, right: 190, bottom: 100}\n")
+    if scope == "global":
+        settings_path.write_text("subtitles:\n  area: {top: 40, left: 30, right: 190, bottom: 100}\n")
+    else:
+        settings["subtitles"] = {"area": {"top": 40, "left": 30, "right": 190, "bottom": 100}}
+        write_project_config(project, settings)
     absolute = rendered_bounds()
     assert 30 <= absolute[0] < absolute[2] <= 190
     assert 40 <= absolute[1] < absolute[3] <= 100

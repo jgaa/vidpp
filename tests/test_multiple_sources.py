@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import yaml
 
 import pytest
 
@@ -40,7 +41,7 @@ def test_list_projects_returns_only_valid_sorted_projects(tmp_path):
     for name in ("Zulu.vidpp", "alpha.vidpp"):
         item = projects / name
         item.mkdir(parents=True)
-        (item / "project.json").write_text("{}")
+        (item / "project.json").write_text(json.dumps({"version": 1, "source_path": "/missing/source.mp4"}))
     (projects / "not-a-project").mkdir()
     assert [item.name for item in _list_projects(projects)] == ["alpha.vidpp", "Zulu.vidpp"]
 
@@ -49,7 +50,7 @@ def test_list_command_uses_configured_projects_dir(tmp_path, monkeypatch, capsys
     projects = tmp_path / "projects"
     project = projects / "demo.vidpp"
     project.mkdir(parents=True)
-    (project / "project.json").write_text("{}")
+    (project / "config.yaml").write_text("version: 1\nsource_path: /missing/source.mp4\n")
     config_path = tmp_path / "config.yaml"
     config_path.write_text(f"version: 1\nprojects_dir: {projects}\n")
     monkeypatch.setenv("VIDPP_CONFIG", str(config_path))
@@ -108,7 +109,7 @@ def test_project_hook_roundtrip(tmp_path):
     assert project_hook(project) is None
     save_project_hook(project, "Saved hook")
     assert project_hook(project) == "Saved hook"
-    assert json.loads((project / "project.json").read_text())["hook"] == "Saved hook"
+    assert yaml.safe_load((project / "config.yaml").read_text())["hook"] == "Saved hook"
 
 
 def test_project_rejects_non_string_hook(tmp_path):
@@ -202,12 +203,17 @@ def test_process_saves_hook_in_new_project(tmp_path, monkeypatch):
     assert project_hook(template_project) == "Template hook"
 
 
-def test_root_help_lists_command_options():
+def test_root_help_lists_short_command_summaries_and_creation_example():
     help_text = parser().format_help()
-    for option in ("--no-edit", "--open", "--output-file", "--project-name", "--replace-project", "--transcript", "--template", "--format"):
-        assert option in help_text
-    assert "command options:" in help_text
-    assert "list projects" in help_text
+    for command in ("list", "import", "transcribe", "analyze", "plan", "render", "preview", "process"):
+        lines = [line.strip() for line in help_text.splitlines() if line.strip().startswith(command + " ")]
+        assert len(lines) == 1
+        assert len(lines[0].split()) > 1
+    assert 'vidpp process input.mp4 --hook "Why privacy matters"' in help_text
+    assert "vidpp <command> help" in help_text
+    assert "--output-file" not in help_text
+    assert "--no-edit" not in help_text
+    assert "command options:" not in help_text
 
 
 def test_replace_project_removes_only_exact_destination(tmp_path):

@@ -21,7 +21,7 @@ python -m pip install -e .
 vidpp process source.mp4 --transcript transcript.json --template template.yaml --hook "Why privacy matters"
 ```
 
-The effective hook is saved as `hook` in `project.json`. Later renders therefore
+The effective hook is saved as `hook` in the project's `config.yaml`. Later renders therefore
 do not need it repeated:
 
 ```bash
@@ -31,6 +31,18 @@ vidpp render source.vidpp
 An explicit `--hook` updates the saved project value. Use `--hook ""` to clear
 it. Hook precedence is an explicit CLI value, then the saved project hook, then
 the template's `hook.text`.
+
+Run `vidpp` or `vidpp -h` for a short command list and a video-and-hook example.
+For a command's description, arguments, and options, use `vidpp <command> help`,
+`vidpp <command> -h`, or `vidpp <command> --help`:
+
+```bash
+vidpp process help
+vidpp render -h
+```
+
+Help does not require a project or configured models. Put the global verbosity
+option before the command, for example `vidpp -v render project.vidpp`.
 
 Pass `--open` to `process` or `render` to launch the completed video in the
 operating system's default viewer without waiting for the viewer to close:
@@ -86,7 +98,7 @@ vidpp plan combined.vidpp
 vidpp render combined.vidpp
 ```
 
-Multiple inputs are normalized and concatenated into `cache/master.mp4`. Transcription, analysis, semantic edits, captions, and rendering use that continuous master timeline. The original videos are only read. `project.json` retains the project hook, every original absolute path, its inspected metadata, and its start/end on the master timeline. If the cached master is deleted, VidPP rebuilds it from the originals.
+Multiple inputs are normalized and concatenated into `cache/master.mp4`. Transcription, analysis, semantic edits, captions, and rendering use that continuous master timeline. The original videos are only read. `config.yaml` retains the project hook, every original absolute path, its inspected metadata, and its start/end on the master timeline. If the cached master is deleted, VidPP rebuilds it from the originals.
 
 Use `--project-name` when only a project name is needed; VidPP appends `.vidpp` and creates it under `projects_dir`. A relative `--project` or staged-command project argument is also resolved under `projects_dir`; use an absolute path for a project elsewhere. `--replace-project` removes an existing destination before recreating it:
 
@@ -169,9 +181,24 @@ transcription:
 `projects_dir` defaults to `~/.local/vidpp/projects`. `output_file_dir` has no
 default; omit it to keep final renders in each project. Relative configured
 paths are resolved from the directory containing the global configuration.
-Each project may also contain `config.yaml`, but project-local configuration is
-limited to the `version`, `transcription`, and `subtitles` keys and cannot redirect global
-project or export locations.
+Each project's `config.yaml` contains its version, source references and inspected
+metadata (`source_path`, `source`, `sources`), plus its saved `hook` and explicit
+`transcription` and `subtitles` overrides when supplied. Project configuration
+cannot redirect global project or export locations. Keep the source data when
+editing settings in this file.
+
+Only required project information and explicitly stored overrides are written.
+Unspecified settings continue to use the current defaults, including after
+defaults change. Loading settings never writes the effective defaults back to
+the project.
+
+Existing projects using `project.json` migrate automatically when accessed,
+including through `list`, `transcribe`, `analyze`, `plan`, `preview`, or `render`.
+Migration combines stored JSON values with an existing `config.yaml`, preserving
+explicit YAML overrides and adding no defaults. Subtitle placement is replaced
+as a whole to avoid combining relative and absolute modes. The original JSON is
+archived as `project.json.bak` (with a numeric suffix if a backup already exists).
+The resulting `config.yaml` is the single active project configuration.
 
 ### Subtitle placement
 
@@ -233,7 +260,13 @@ vidpp import source.mp4 project/ --project-config recording-config.yaml
 vidpp transcribe project/
 ```
 
-The supplied configuration is copied to `project/config.yaml`. For an existing project, edit that file and rerun `vidpp transcribe project/`. VidPP detects suspicious alignment—leading untranscribed audio, words stretched beyond two seconds, or unexplained word gaps—and runs a context-independent Whisper recovery pass only over those regions. A region is replaced only when recovery finds more words, so a weaker second pass cannot silently discard primary text. The raw primary and recovery results remain in `cache/` and `cache/recovery/`; reconciliation details are in `cache/transcription-recovery.json`. By default the recovery pass uses the primary model. Set `recovery_model: large-v3` (or `VIDPP_WHISPER_RECOVERY_MODEL=large-v3`) for higher quality at the cost of a larger model and slower loading. Word timestamps and confidence are retained in `transcript.json`; deterministic sentence grouping is written to `cache/sentences.json`.
+The supplied configuration's explicit overrides are merged into
+`project/config.yaml`, preserving the required source information. It accepts
+`version`, `hook`, `transcription`, and `subtitles`; omitted overrides remain
+unset. For an existing project, edit that file and rerun transcription when
+changing transcription settings.
+
+VidPP detects suspicious alignment—leading untranscribed audio, words stretched beyond two seconds, or unexplained word gaps—and runs a context-independent Whisper recovery pass only over those regions. A region is replaced only when recovery finds more words, so a weaker second pass cannot silently discard primary text. The raw primary and recovery results remain in `cache/` and `cache/recovery/`; reconciliation details are in `cache/transcription-recovery.json`. By default the recovery pass uses the primary model. Set `recovery_model: large-v3` (or `VIDPP_WHISPER_RECOVERY_MODEL=large-v3`) for higher quality at the cost of a larger model and slower loading. Word timestamps and confidence are retained in `transcript.json`; deterministic sentence grouping is written to `cache/sentences.json`.
 
 ### CrisperWhisper transcription
 

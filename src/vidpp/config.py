@@ -2,8 +2,10 @@
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import json
 import logging
 import math
+import tempfile
 import unicodedata
 
 import yaml
@@ -12,7 +14,87 @@ from .errors import VidPPError
 
 LOG = logging.getLogger(__name__)
 GLOBAL_KEYS = {"version", "transcription", "projects_dir", "output_file_dir", "subtitles"}
-PROJECT_KEYS = {"version", "transcription", "subtitles"}
+PROJECT_OVERRIDE_KEYS = {"version", "transcription", "subtitles", "hook"}
+PROJECT_KEYS = PROJECT_OVERRIDE_KEYS | {"source_path", "source", "sources"}
+
+
+def _merge_project_values(stored: dict, overrides: dict) -> dict:
+    result = dict(stored)
+    for key, value in overrides.items():
+        if key != "subtitles" and isinstance(result.get(key), dict) and isinstance(value, dict):
+            result[key] = _merge_project_values(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def write_project_config(project: Path, values: dict) -> None:
+    """Atomically persist stored values only; never materialize defaults."""
+    path = project / "config.yaml"
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=project, prefix=".config-", suffix=".yaml", delete=False) as stream:
+            temporary = Path(stream.name)
+            yaml.safe_dump(values, stream, sort_keys=False, allow_unicode=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if path.exists():
+            temporary.chmod(path.stat().st_mode & 0o777)
+        temporary.replace(path)
+    except (OSError, yaml.YAMLError) as exc:
+        raise VidPPError(f"cannot write project configuration {path}: {exc}") from exc
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def migrate_project_config(project: Path) -> None:
+    """Consolidate legacy metadata and explicit YAML overrides without defaults."""
+    legacy = project / "project.json"
+    if not legacy.is_file():
+        return
+    path = project / "config.yaml"
+    try:
+        values = json.loads(legacy.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise VidPPError(f"invalid legacy project {legacy}: {exc}") from exc
+    if not isinstance(values, dict) or values.get("version", 1) != 1:
+        raise VidPPError(f"invalid legacy project {legacy}: expected a version 1 mapping")
+    overrides = _read_config(path) if path.exists() else {}
+    # Explicit subtitle placement replaces its legacy counterpart, so
+    # placement modes never accidentally merge and empty overrides stay empty.
+    merged = _merge_project_values(values, overrides)
+    LOG.debug("Migrating project configuration: legacy=%s, overrides=%s, merged=%s", values, overrides, merged)
+    write_project_config(project, merged)
+    backup = project / "project.json.bak"
+    index = 1
+    while backup.exists():
+        backup = project / f"project.json.bak.{index}"
+        index += 1
+    try:
+        legacy.rename(backup)
+    except OSError as exc:
+        raise VidPPError(f"configuration migrated to {path}, but cannot archive {legacy}: {exc}") from exc
+    LOG.info("Migrated project settings to %s; original saved as %s", path, backup)
+
+
+def read_project_config(project: Path) -> dict:
+    migrate_project_config(project)
+    path = project / "config.yaml"
+    values = _read_config(path) if path.exists() else {}
+    if set(values) - PROJECT_KEYS:
+        raise VidPPError(f"invalid configuration keys/version in {path}")
+    return values
+
+
+def apply_project_config(project: Path, path: Path) -> None:
+    """Merge supplied overrides with required project data rather than replacing it."""
+    overrides = _read_config(path)
+    if set(overrides) - PROJECT_OVERRIDE_KEYS:
+        raise VidPPError(f"project overrides may contain only version, hook, transcription and subtitles in {path}")
+    values = read_project_config(project)
+    write_project_config(project, _merge_project_values(values, overrides))
+    LOG.debug("Applied project overrides from %s: %s", path, overrides)
 
 
 @dataclass(frozen=True)
@@ -55,12 +137,13 @@ def subtitle_config(project: Path) -> SubtitleConfig:
     """Project placement replaces global placement as a whole, including its mode."""
     global_path, explicit = _global_config_path()
     result = SubtitleConfig()
+    project_values = read_project_config(project)
     for index, path in enumerate((global_path, project / "config.yaml")):
         if not path.exists():
             if index == 0 and explicit:
                 raise VidPPError(f"configuration does not exist: {path}")
             continue
-        raw = _read_config(path)
+        raw = _read_config(path) if index == 0 else project_values
         if set(raw) - (GLOBAL_KEYS if index == 0 else PROJECT_KEYS):
             raise VidPPError(f"invalid configuration keys/version in {path}")
         if "subtitles" in raw:
@@ -137,6 +220,7 @@ def app_config() -> AppConfig:
 def transcription_config(project: Path) -> TranscriptionConfig:
     global_path, explicit = _global_config_path()
     paths = [global_path, project / "config.yaml"]
+    project_values = read_project_config(project)
     values = {"engine": "whisper", "model": "turbo", "crisper_backend": "auto", "language": "en"}
     recovery_model: str | None = None
     phrases, seen = [], set()
@@ -145,7 +229,7 @@ def transcription_config(project: Path) -> TranscriptionConfig:
             if explicit and index == 0:
                 raise VidPPError(f"configuration does not exist: {path}")
             continue
-        raw = _read_config(path)
+        raw = _read_config(path) if index == 0 else project_values
         allowed = GLOBAL_KEYS if index == 0 else PROJECT_KEYS
         if set(raw) - allowed:
             raise VidPPError(f"invalid configuration keys/version in {path}")

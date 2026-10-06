@@ -17,7 +17,7 @@ import subprocess
 import urllib.request
 
 from .errors import VidPPError
-from .config import transcription_config
+from .config import read_project_config, transcription_config, write_project_config
 from .models import (
     EditOperation,
     TranscriptSegment,
@@ -147,16 +147,15 @@ def create_project(source: Path | list[Path], project: Path) -> dict[str, Any]:
         source_records.append({"path": str(path), "timeline_start": offset, "timeline_end": offset + item["duration"], "source": item})
         offset += item["duration"]
     metadata = {"version": 1, "source_path": str(active_source), "source": active_metadata, "sources": source_records}
-    write_json(project / "project.json", metadata)
+    write_project_config(project, metadata)
     return metadata
 
 
 def project_data(project: Path) -> dict[str, Any]:
-    try: raw = json.loads((project / "project.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc: raise VidPPError(f"invalid project: {exc}") from exc
-    if not isinstance(raw, dict) or raw.get("version") != 1 or not isinstance(raw.get("source_path"), str): raise VidPPError("invalid project.json")
+    raw = read_project_config(project)
+    if raw.get("version") != 1 or not isinstance(raw.get("source_path"), str): raise VidPPError("invalid project config.yaml")
     if "hook" in raw and not isinstance(raw["hook"], str):
-        raise VidPPError("invalid project.json: hook must be a string")
+        raise VidPPError("invalid project config.yaml: hook must be a string")
     active_source = Path(raw["source_path"])
     if not active_source.is_file():
         sources = raw.get("sources")
@@ -183,8 +182,8 @@ def save_project_hook(project: Path, hook: str) -> None:
     if data.get("hook") == hook and "hook" in data:
         return
     data["hook"] = hook
-    write_json(project / "project.json", data)
-    LOG.debug("Saved project hook in %s: %r", project / "project.json", hook)
+    write_project_config(project, data)
+    LOG.debug("Saved project hook in %s: %r", project / "config.yaml", hook)
 
 
 def refresh_source_metadata(project: Path) -> dict[str, Any]:
@@ -193,7 +192,7 @@ def refresh_source_metadata(project: Path) -> dict[str, Any]:
     metadata = inspect(Path(data["source_path"]))
     if data.get("source") != metadata:
         data["source"] = metadata
-        write_json(project / "project.json", data)
+        write_project_config(project, data)
         LOG.info("Updated project source metadata: display %dx%d, rotation %.0f°", metadata["width"], metadata["height"], metadata["rotation"])
     return metadata
 

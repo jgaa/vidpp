@@ -144,9 +144,7 @@ Create a project directory similar to:
 
 ```text
 project/
-├── project.json
-├── source/
-│   └── source.mp4
+├── config.yaml
 ├── transcript.json
 ├── analysis.json
 ├── edit.json
@@ -157,15 +155,31 @@ project/
     └── final.mp4
 ```
 
-`project.json` stores the project-specific hook as an optional top-level string:
+`config.yaml` stores required source references and inspected metadata, together
+with explicit project overrides. The hook is an optional top-level string:
 
-```json
-{
-  "version": 1,
-  "source_path": "/absolute/path/to/source.mp4",
-  "hook": "Why privacy matters"
-}
+```yaml
+version: 1
+source_path: /absolute/path/to/source.mp4
+source:
+  duration: 12.0
+  width: 1080
+  height: 1920
+  fps: 30/1
+hook: Why privacy matters
 ```
+
+The file contains only required information and explicitly stored values;
+effective defaults must never be dumped into project configuration. Existing
+`project.json` files migrate on project access: merge stored values with explicit
+YAML overrides, write `config.yaml` atomically, then archive the old JSON as
+`project.json.bak`. YAML overrides take precedence. Nested stored values are
+preserved unless overridden; a `subtitles` section replaces the old section as
+a whole to preserve the choice between relative and absolute placement.
+
+`--project-config` merges explicitly provided overrides into this same file
+without replacing required metadata. Listing projects recognizes this file and
+migrates legacy projects without requiring source media to be available.
 
 Supplying `--hook` while processing or operating on a project updates this
 field. Render and preview use the saved value when `--hook` is omitted. An
