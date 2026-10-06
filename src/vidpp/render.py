@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 import logging
 import math
 
@@ -14,6 +15,7 @@ from .errors import VidPPError
 from .models import EditOperation, TranscriptSegment, load_edit_plan, load_transcript
 from .template import Template
 from .captions import caption_chunks, caption_font, remap_transcript
+from .config import SubtitleConfig, subtitle_config
 
 LOG = logging.getLogger(__name__)
 
@@ -35,7 +37,57 @@ def _ass_color(value: str) -> str:
     return f"&H{255 - opacity:02X}{rgb[4:6]}{rgb[2:4]}{rgb[0:2]}"
 
 
-def write_ass(path: Path, transcript: list[TranscriptSegment], template: Template, *, include_hook: bool = True) -> None:
+def _subtitle_layout(template: Template, transcript: list[TranscriptSegment], placement: SubtitleConfig):
+    margin = max(8, round(template.width * 80 / 1080))
+    available = template.width - 2 * margin - 2 * template.subtitle_outline_width
+    override = ""
+    if placement.area is not None:
+        area = placement.area
+        if area.right > template.width or area.bottom > template.height:
+            raise VidPPError(f"subtitles.area must fit inside the {template.width}x{template.height} output frame")
+        width, height = area.right - area.left, area.bottom - area.top
+        if available <= 0:
+            raise VidPPError("Subtitle outline and margins leave no room for captions")
+        # Scale from the configured typography, then shrink further to fit height
+        # and indivisible words. Grouping still respects the template's limits.
+        size = max(1, math.floor(template.subtitle_font_size * min(1, width / available)))
+        words = [text for segment in transcript
+                 for text in ([word.word.strip() for word in segment.words] if segment.words else segment.text.split())]
+        while size >= 1:
+            outline = max(1, round(template.subtitle_outline_width * size / template.subtitle_font_size))
+            padding = outline + 1  # Include the ASS shadow in the safe area.
+            available = width - 2 * padding
+            font = caption_font(template.subtitle_font, size, template.subtitle_weight)
+            ascent, descent = font.getmetrics()
+            if (available > 0 and (ascent + descent) * template.subtitle_max_lines + 2 * padding <= height
+                    and all(font.getlength(word) <= available for word in words)):
+                break
+            size -= 1
+        else:
+            raise VidPPError("subtitles.area is too small to fit captions")
+        template = replace(template, subtitle_font_size=size, subtitle_outline_width=outline, subtitle_position="bottom")
+        x = (area.left + area.right) / 2
+        y = area.bottom - padding
+        override = f"{{\\an2\\pos({x:g},{y:g})\\clip({area.left},{area.top},{area.right},{area.bottom})}}"
+        LOG.debug("Absolute subtitle area %s: anchor=(%g,%g), font=%d, outline=%d, text width=%d", area, x, y, size, outline, available)
+    else:
+        font = caption_font(template.subtitle_font, template.subtitle_font_size, template.subtitle_weight)
+        if placement.relative_y is not None:
+            y = template.height - template.subtitle_bottom_margin if template.subtitle_position == "bottom" else template.subtitle_bottom_margin
+            y += placement.relative_y * template.height
+            if not 0 <= y <= template.height:
+                raise VidPPError("subtitles.relative_y moves the subtitle anchor outside the output frame")
+            override = f"{{\\pos({template.width / 2:g},{y:g})}}"
+            LOG.debug("Relative subtitle offset=%g: anchor=(%g,%g), alignment=%s", placement.relative_y, template.width / 2, y, template.subtitle_position)
+        else:
+            LOG.debug("Default subtitle layout: alignment=%s, vertical margin=%d, horizontal margin=%d, font=%d", template.subtitle_position, template.subtitle_bottom_margin, margin, template.subtitle_font_size)
+    return template, font, available, margin, override
+
+
+def write_ass(path: Path, transcript: list[TranscriptSegment], template: Template, *, include_hook: bool = True, placement: SubtitleConfig | None = None) -> None:
+    override = ""
+    if template.subtitles_enabled:
+        template, font, available, margin, override = _subtitle_layout(template, transcript, placement or SubtitleConfig())
     color = _ass_color(template.subtitle_color)
     outline = _ass_color(template.subtitle_outline_color)
     background = _ass_color(template.subtitle_background) if template.subtitle_background else "&HFF000000"
@@ -59,12 +111,9 @@ def write_ass(path: Path, transcript: list[TranscriptSegment], template: Templat
     if include_hook and template.hook_enabled and template.hook_text:
         lines.append(f"Dialogue: 0,0:00:00.00,{_ass_time(template.hook_duration)},Hook,,0,0,0,,{_ass_text(template.hook_text)}")
     if template.subtitles_enabled:
-        font = caption_font(template.subtitle_font, template.subtitle_font_size, template.subtitle_weight)
-        margin = max(8, round(template.width * 80 / 1080))
         # Disable automatic wrapping; line breaks below are measured against the font.
         lines.insert(2, "WrapStyle: 2")
         lines = [line.replace(",80,80,", f",{margin},{margin},") if line.startswith("Style:") else line for line in lines]
-        available = template.width - 2 * margin - 2 * template.subtitle_outline_width
         for item in caption_chunks(
             transcript,
             template.subtitle_max_lines,
@@ -76,7 +125,7 @@ def write_ass(path: Path, transcript: list[TranscriptSegment], template: Templat
             max_duration=template.subtitle_max_duration,
             linger=template.subtitle_linger,
         ):
-            lines.append(f"Dialogue: 0,{_ass_time(item.start)},{_ass_time(item.end)},Caption,,0,0,0,,{_ass_text(item.text)}")
+            lines.append(f"Dialogue: 0,{_ass_time(item.start)},{_ass_time(item.end)},Caption,,0,0,0,,{override}{_ass_text(item.text)}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -248,6 +297,7 @@ def render(
     apply_edits: bool = True,
     output_file: Path | None = None,
 ) -> Path:
+    placement = subtitle_config(project)
     data = project_data(project)
     transcript = load_transcript(project / "transcript.json")
     stored_operations = load_edit_plan(project / "edit.json", float(data["source"]["duration"])) if (project / "edit.json").exists() else []
@@ -261,7 +311,7 @@ def render(
     generated_hook = None
     if template.hook_enabled and template.hook_text and template.hook_image is None:
         generated_hook = render_hook_bubble(project / "cache" / "hook.png", template)
-    write_ass(ass_path, remap_transcript(transcript, ranges), template, include_hook=generated_hook is None)
+    write_ass(ass_path, remap_transcript(transcript, ranges), template, include_hook=generated_hook is None, placement=placement)
     filter_graph = build_filter(float(data["source"]["duration"]), operations, template, ass_path, generated_hook)
     command = ["ffmpeg", "-y", "-i", data["source_path"], "-filter_complex", filter_graph, "-map", "[outv]", "-map", "[outa]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"]
     if template.fps != "source": command.extend(["-r", str(template.fps)])

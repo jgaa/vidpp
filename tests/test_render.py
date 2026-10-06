@@ -1,10 +1,18 @@
+import io
+import json
+import shutil
+import subprocess
+
 from PIL import Image
 import pytest
 
 from vidpp.errors import VidPPError
 from vidpp.models import EditOperation, TranscriptSegment
-from vidpp.render import build_filter, log_edit_summary, remap_transcript, render_hook_bubble, render_target, timeline_ranges, write_ass
+from vidpp.render import build_filter, log_edit_summary, remap_transcript, render, render_hook_bubble, render_target, timeline_ranges, write_ass
+from vidpp.core import create_project
 from vidpp.template import Template
+from vidpp.config import SubtitleConfig, SubtitleArea
+from vidpp.captions import caption_font
 
 
 def test_shorten_pause_generates_short_retained_range(tmp_path):
@@ -104,3 +112,99 @@ def test_ass_uses_independent_weighted_subtitle_style(tmp_path):
     assert ",&H00101010,&HFF000000,-1," in contents
     assert "Style: Hook,DejaVu Sans,72" in contents
     assert "Dialogue: 0,0:00:00.00" not in contents
+
+
+@pytest.mark.parametrize("position,y", [("bottom", 720 - 180 - 72), ("top", 180 - 72)])
+def test_relative_subtitle_offset_preserves_style(tmp_path, position, y):
+    path = tmp_path / "captions.ass"
+    template = Template(subtitle_font="DejaVu Sans", subtitle_position=position)
+    transcript = [TranscriptSegment(0, 1, "A caption")]
+    write_ass(path, transcript, template)
+    original = path.read_text()
+    write_ass(path, transcript, template, placement=SubtitleConfig(relative_y=-.1))
+    shifted = path.read_text()
+    assert shifted == original.replace("A caption", f"{{\\pos(640,{y})}}A caption")
+    write_ass(path, transcript, template, placement=SubtitleConfig())
+    assert path.read_text() == original
+
+
+def test_absolute_area_scales_font_and_wraps_inside_rectangle(tmp_path):
+    path = tmp_path / "captions.ass"
+    template = Template(subtitle_font="DejaVu Sans", hook_font_size=72)
+    area = SubtitleArea(top=100, left=100, right=500, bottom=180)
+    transcript = [TranscriptSegment(0, 2, "Wideword followed by several more words to wrap.")]
+    write_ass(path, transcript, template, placement=SubtitleConfig(area=area))
+    contents = path.read_text()
+    style = next(line.split(",") for line in contents.splitlines() if line.startswith("Style: Caption,"))
+    size, outline = int(style[2]), int(style[17])
+    assert size < template.subtitle_font_size
+    font = caption_font(template.subtitle_font, size, template.subtitle_weight)
+    assert sum(font.getmetrics()) * template.subtitle_max_lines + 2 * (outline + 1) <= 80
+    assert "Style: Hook,Noto Sans,72," in contents
+    captions = [line for line in contents.splitlines() if line.startswith("Dialogue:")]
+    assert captions
+    for line in captions:
+        assert f"{{\\an2\\pos(300,{180 - outline - 1})\\clip(100,100,500,180)}}" in line
+        text = line.split("}", 1)[1]
+        assert all(font.getlength(part) <= 400 - 2 * (outline + 1) for part in text.split(r"\N"))
+
+
+@pytest.mark.parametrize("placement,error", [
+    (SubtitleConfig(relative_y=1), "outside"),
+    (SubtitleConfig(area=SubtitleArea(0, 0, 1281, 100)), "inside"),
+    (SubtitleConfig(area=SubtitleArea(0, 0, 100, 721)), "inside"),
+    (SubtitleConfig(area=SubtitleArea(0, 0, 1, 1)), "too small"),
+])
+def test_subtitle_placement_must_fit_output(tmp_path, placement, error):
+    with pytest.raises(VidPPError, match=error):
+        write_ass(tmp_path / "captions.ass", [], Template(subtitle_font="DejaVu Sans"), placement=placement)
+
+
+@pytest.mark.parametrize("scope", ["global", "project"])
+def test_rendered_subtitle_pixels_follow_settings(tmp_path, monkeypatch, scope):
+    if not shutil.which("ffmpeg"):
+        pytest.skip("FFmpeg unavailable")
+    global_path = tmp_path / "global.yaml"
+    global_path.write_text("version: 1\n")
+    monkeypatch.setenv("VIDPP_CONFIG", str(global_path))
+    source = tmp_path / "source.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=black:size=320x240:rate=25",
+        "-f", "lavfi", "-i", "sine=frequency=440", "-t", "2", "-c:v", "libx264", "-c:a", "aac", str(source),
+    ], check=True)
+    original_source = source.read_bytes()
+    project = tmp_path / "project"
+    create_project(source, project)
+    (project / "transcript.json").write_text(json.dumps({"segments": [{
+        "start": 0, "end": 1, "text": "Wide subtitle text",
+        "words": [{"word": word, "start": i * .3, "end": (i + 1) * .3}
+                  for i, word in enumerate(["Wide", "subtitle", "text"])],
+    }]}))
+    template = Template(width=320, height=240, video_width=320, video_height=240,
+                        subtitle_font="DejaVu Sans", subtitle_font_size=28,
+                        subtitle_bottom_margin=30)
+
+    def rendered_bounds():
+        target = render(project, template, preview=True)
+        result = subprocess.run([
+            "ffmpeg", "-v", "error", "-ss", "0.2", "-i", str(target),
+            "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-",
+        ], check=True, capture_output=True)
+        with Image.open(io.BytesIO(result.stdout)) as image:
+            bounds = image.convert("L").point(lambda value: 255 if value > 100 else 0).getbbox()
+        assert bounds is not None
+        return bounds
+
+    baseline = rendered_bounds()
+    settings_path = global_path if scope == "global" else project / "config.yaml"
+    settings_path.write_text("subtitles:\n  relative_y: -0.2\n")
+    moved = rendered_bounds()
+    assert moved[0] == baseline[0] and moved[2] == baseline[2]
+    assert moved[1] == pytest.approx(baseline[1] - 48, abs=1)
+    assert moved[3] == pytest.approx(baseline[3] - 48, abs=1)
+    settings_path.write_text("subtitles:\n  area: {top: 40, left: 30, right: 190, bottom: 100}\n")
+    absolute = rendered_bounds()
+    assert 30 <= absolute[0] < absolute[2] <= 190
+    assert 40 <= absolute[1] < absolute[3] <= 100
+    assert (absolute[0] + absolute[2]) / 2 == pytest.approx(110, abs=3)
+    assert source.read_bytes() == original_source

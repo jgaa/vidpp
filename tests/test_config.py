@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from vidpp.config import app_config, transcription_config
+from vidpp.config import SubtitleArea, SubtitleConfig, app_config, subtitle_config, transcription_config
 from vidpp.errors import VidPPError
 
 
@@ -85,3 +85,57 @@ def test_rejects_bad_phrases(tmp_path, monkeypatch, value):
     monkeypatch.setenv("VIDPP_CONFIG", str(path))
     with pytest.raises(VidPPError):
         transcription_config(tmp_path)
+
+
+def test_subtitle_settings_inherit_replace_and_reset(tmp_path, monkeypatch):
+    path = tmp_path / "global.yaml"
+    path.write_text("subtitles:\n  relative_y: -0.1\n")
+    monkeypatch.setenv("VIDPP_CONFIG", str(path))
+    project = tmp_path / "project"
+    project.mkdir()
+    assert subtitle_config(project) == SubtitleConfig(relative_y=-0.1)
+    app_config()
+    transcription_config(project)
+    local = project / "config.yaml"
+    local.write_text("subtitles:\n  area: {top: 100, left: 20, right: 500, bottom: 300}\n")
+    assert subtitle_config(project) == SubtitleConfig(area=SubtitleArea(100, 20, 500, 300))
+    transcription_config(project)
+    path.write_text("subtitles:\n  area: {top: 100, left: 20, right: 500, bottom: 300}\n")
+    local.write_text("subtitles:\n  relative_y: 0\n")
+    assert subtitle_config(project) == SubtitleConfig(relative_y=0)
+    local.write_text("subtitles: {}\n")
+    assert subtitle_config(project) == SubtitleConfig()
+    path.write_text("version: 1\n")
+    local.unlink()
+    assert subtitle_config(project) == SubtitleConfig()
+
+
+@pytest.mark.parametrize("section", [
+    "{relative_y: -0.1, area: {top: 0, left: 0, right: 100, bottom: 100}}",
+    "{relative_y: true}", "{relative_y: .nan}", "{relative_y: .inf}",
+    "{relative_y: 1.1}", "{relative_y: -1.1}", "{relative_y: null}",
+    "{area: {top: 0, left: 0, right: 100}}",
+    "{area: {top: 0, left: 10, right: 10, bottom: 100}}",
+    "{area: {top: 100, left: 0, right: 10, bottom: 99}}",
+    "{area: {top: -1, left: 0, right: 10, bottom: 100}}",
+    "{area: {top: true, left: 0, right: 10, bottom: 100}}",
+    "{area: {top: 0.5, left: 0, right: 10, bottom: 100}}",
+    "{area: {top: 0, left: 0, right: 10, bottom: 100, extra: 1}}",
+    "{y: 0.5}", "null",
+])
+@pytest.mark.parametrize("scope", ["global", "project"])
+def test_invalid_subtitle_settings(tmp_path, monkeypatch, section, scope):
+    global_path = tmp_path / "global.yaml"
+    global_path.write_text("version: 1\n")
+    monkeypatch.setenv("VIDPP_CONFIG", str(global_path))
+    project = tmp_path / "project"
+    project.mkdir()
+    path = global_path if scope == "global" else project / "config.yaml"
+    path.write_text(f"subtitles: {section}\n")
+    with pytest.raises(VidPPError):
+        subtitle_config(project)
+    with pytest.raises(VidPPError):
+        transcription_config(project)
+    if scope == "global":
+        with pytest.raises(VidPPError):
+            app_config()

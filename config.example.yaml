@@ -6,6 +6,16 @@ projects_dir: ~/.local/vidpp/projects
 # Optional. Omit this to keep final videos in each project's output directory.
 # output_file_dir: ~/Videos
 
+# Optional subtitle placement, also supported in each project's config.yaml.
+# Choose a relative vertical offset OR an absolute rectangle, never both.
+# Negative relative_y moves up by a fraction of the output height.
+# subtitles:
+#   relative_y: -0.10
+# Rectangle coordinates are output pixels from the top-left corner.
+# subtitles:
+#   area: {top: 700, left: 60, right: 660, bottom: 1000}
+# Project subtitles: {} restores template/default placement.
+
 transcription:
   engine: whisper  # Or crisperwhisper for optional verbatim transcription.
   model: turbo

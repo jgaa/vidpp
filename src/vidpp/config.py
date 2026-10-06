@@ -2,11 +2,71 @@
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import logging
+import math
 import unicodedata
 
 import yaml
 
 from .errors import VidPPError
+
+LOG = logging.getLogger(__name__)
+GLOBAL_KEYS = {"version", "transcription", "projects_dir", "output_file_dir", "subtitles"}
+PROJECT_KEYS = {"version", "transcription", "subtitles"}
+
+
+@dataclass(frozen=True)
+class SubtitleArea:
+    top: int
+    left: int
+    right: int
+    bottom: int
+
+
+@dataclass(frozen=True)
+class SubtitleConfig:
+    relative_y: float | None = None
+    area: SubtitleArea | None = None
+
+
+def _subtitle_settings(section: object, path: Path) -> SubtitleConfig:
+    if not isinstance(section, dict) or set(section) - {"relative_y", "area"}:
+        raise VidPPError(f"invalid subtitle settings in {path}")
+    if "relative_y" in section and "area" in section:
+        raise VidPPError(f"subtitles must choose relative_y or area, not both, in {path}")
+    if "relative_y" in section:
+        value = section["relative_y"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not -1 <= value <= 1 or not math.isfinite(value):
+            raise VidPPError("subtitles.relative_y must be a finite number between -1 and 1")
+        return SubtitleConfig(relative_y=float(value))
+    if "area" in section:
+        area = section["area"]
+        if not isinstance(area, dict) or set(area) != {"top", "left", "right", "bottom"}:
+            raise VidPPError("subtitles.area requires exactly top, left, right and bottom")
+        if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in area.values()):
+            raise VidPPError("subtitles.area coordinates must be non-negative integer pixels")
+        if area["right"] <= area["left"] or area["bottom"] <= area["top"]:
+            raise VidPPError("subtitles.area requires left < right and top < bottom")
+        return SubtitleConfig(area=SubtitleArea(**area))
+    return SubtitleConfig()
+
+
+def subtitle_config(project: Path) -> SubtitleConfig:
+    """Project placement replaces global placement as a whole, including its mode."""
+    global_path, explicit = _global_config_path()
+    result = SubtitleConfig()
+    for index, path in enumerate((global_path, project / "config.yaml")):
+        if not path.exists():
+            if index == 0 and explicit:
+                raise VidPPError(f"configuration does not exist: {path}")
+            continue
+        raw = _read_config(path)
+        if set(raw) - (GLOBAL_KEYS if index == 0 else PROJECT_KEYS):
+            raise VidPPError(f"invalid configuration keys/version in {path}")
+        if "subtitles" in raw:
+            result = _subtitle_settings(raw["subtitles"], path)
+            LOG.debug("Subtitle placement from %s: %s", path, result)
+    return result
 
 
 @dataclass(frozen=True)
@@ -57,12 +117,14 @@ def app_config() -> AppConfig:
     path, explicit = _global_config_path()
     if path.exists():
         raw = _read_config(path)
-        if set(raw) - {"version", "transcription", "projects_dir", "output_file_dir"}:
+        if set(raw) - GLOBAL_KEYS:
             raise VidPPError(f"invalid configuration keys/version in {path}")
     elif explicit:
         raise VidPPError(f"configuration does not exist: {path}")
     else:
         raw = {}
+    if "subtitles" in raw:
+        _subtitle_settings(raw["subtitles"], path)
     projects = _configured_directory(raw, "projects_dir", Path.home() / ".local/vidpp/projects", path)
     output = _configured_directory(raw, "output_file_dir", None, path)
     assert projects is not None
@@ -84,9 +146,11 @@ def transcription_config(project: Path) -> TranscriptionConfig:
                 raise VidPPError(f"configuration does not exist: {path}")
             continue
         raw = _read_config(path)
-        allowed = {"version", "transcription", "projects_dir", "output_file_dir"} if index == 0 else {"version", "transcription"}
+        allowed = GLOBAL_KEYS if index == 0 else PROJECT_KEYS
         if set(raw) - allowed:
             raise VidPPError(f"invalid configuration keys/version in {path}")
+        if "subtitles" in raw:
+            _subtitle_settings(raw["subtitles"], path)
         section = raw.get("transcription", {})
         if not isinstance(section, dict) or set(section) - {"engine", "model", "recovery_model", "crisper_backend", "language", "phrases"}:
             raise VidPPError(f"invalid transcription settings in {path}")

@@ -145,9 +145,9 @@ FFmpeg is also required. The default Whisper model is `turbo`, with word timesta
 
 If Whisper is unavailable, VidPP prints install instructions and exits without rendering. Alternatives are a timestamped `--transcript`, or `VIDPP_TRANSCRIBE_COMMAND` pointing to a local executable that accepts the source-video path as its final argument and writes compatible transcript JSON to stdout. That adapter controls its own model/prompt settings. VidPP invokes it as an argument array, never through a shell.
 
-### Transcription configuration and vocabulary
+### Application and project configuration
 
-Global settings live in `$XDG_CONFIG_HOME/vidpp/config.yaml`, normally `~/.config/vidpp/config.yaml`. `VIDPP_CONFIG=/path/to/config.yaml` overrides that location. The global configuration accepts application paths and transcription settings (see `config.example.yaml`):
+Global settings live in `$XDG_CONFIG_HOME/vidpp/config.yaml`, normally `~/.config/vidpp/config.yaml`. `VIDPP_CONFIG=/path/to/config.yaml` overrides that location. The global configuration accepts application paths, transcription settings, and subtitle placement (see `config.example.yaml`):
 
 ```yaml
 version: 1
@@ -170,8 +170,57 @@ transcription:
 default; omit it to keep final renders in each project. Relative configured
 paths are resolved from the directory containing the global configuration.
 Each project may also contain `config.yaml`, but project-local configuration is
-limited to the `version` and `transcription` keys and cannot redirect global
+limited to the `version`, `transcription`, and `subtitles` keys and cannot redirect global
 project or export locations.
+
+### Subtitle placement
+
+Subtitle placement can be configured globally or in a project's `config.yaml`.
+Project placement replaces global placement entirely; it does not merge the two
+modes. Choose either `relative_y` or `area`, never both:
+
+```yaml
+subtitles:
+  relative_y: -0.10
+```
+
+`relative_y` is an offset from the current template/default subtitle anchor,
+as a fraction of the output height. Negative values move subtitles up; positive
+values move them down. The value must be between -1 and 1, and the resulting
+anchor must remain inside the frame. Horizontal centering and font size stay
+as defined by the template.
+
+Alternatively, define an absolute subtitle rectangle in output pixels.
+For example, on a 720×1280 portrait output:
+
+```yaml
+subtitles:
+  area:
+    top: 700
+    left: 60
+    right: 660
+    bottom: 1000
+```
+
+These are coordinates measured from the output frame's top-left corner, not
+insets. All four are required, with `left < right` and `top < bottom`, inside
+the output frame. Captions are centered horizontally and bottom-aligned inside
+the rectangle. Font and outline sizes scale down with the area's width and,
+if necessary, shrink further to fit the configured maximum lines and longest
+word. Text wraps to the area's width; the configured font size is the upper
+limit. A rectangle too small for captions is rejected.
+
+Omit `subtitles` to inherit global placement. Use `subtitles: {}` in a project
+to explicitly restore the existing template/default placement. With no placement
+settings, the current positioning and font logic are unchanged. Edit the project's
+`config.yaml` and run `vidpp render project.vidpp` or `vidpp preview project.vidpp`;
+retranscription is not needed. Debug output (`vidpp -v render project.vidpp`)
+logs the selected placement, resolved coordinates, and fitted font size; the
+generated subtitle layout remains inspectable in `cache/captions.ass`.
+These settings also apply to `process`, including
+when provided through `--project-config`.
+
+### Transcription configuration and vocabulary
 
 Project transcription settings override global settings; environment variables override both. `VIDPP_TRANSCRIBE_MODEL` selects the model for either engine. The older `VIDPP_WHISPER_MODEL`, plus `VIDPP_WHISPER_RECOVERY_MODEL` and `VIDPP_WHISPER_LANGUAGE`, remain supported. Phrase lists are combined in global-then-project order, normalized for Unicode and whitespace, and deduplicated case-insensitively while keeping the first spelling. The combined vocabulary is passed to Whisper as `--initial_prompt`. Keep it focused: Whisper has a limited prompt context and vocabulary hints cannot force a recognition. The effective settings are saved in `cache/transcription-settings.json` and logged at debug level. Whisper documents this prompt as useful for names and vocabulary in its [transcription implementation](https://github.com/openai/whisper/blob/main/whisper/transcribe.py).
 
